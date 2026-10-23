@@ -57,7 +57,13 @@ test('backend rejects unsigned, expired and body-tampered guest requests',async(
  const old=String(Date.now()-600000);assert.equal((await submit(input,{...base,'x-mdk-time':old,'x-mdk-signature':await signGuest(secret,id,old,body)})).status,401);
  assert.equal(b.sqlite.prepare('SELECT count(*) as count FROM order_requests').get().count,0);b.sqlite.close();
 });
-test('missing configuration and upstream redirects fail closed without leaking credentials',async()=>{
- assert.equal((await storefront(request('/'),{})).status,503);
+test('standalone mode serves local catalogue gracefully when backend configuration is absent',async()=>{
+ const standalone=await storefront(request('/'),{});
+ assert.equal(standalone.status,200);
+ assert.match(await standalone.text(),/MDK Electronics/);
+ const cat=await storefront(request('/api/catalog'),{});
+ assert.equal(cat.status,200);
+ const products=await cat.json();
+ assert.ok(Array.isArray(products)&&products.length>=9);
  const r=await storefront(request('/'),env,async()=>new Response('<html>Sign in</html>',{headers:{'Content-Type':'text/html'}}));assert.equal(r.status,503);assert.doesNotMatch(await r.text(),/local-test-token/);
 });

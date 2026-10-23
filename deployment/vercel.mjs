@@ -1,6 +1,8 @@
 import {createHmac,randomUUID} from 'node:crypto';
 import {route} from '../server/router.mjs';
 import {signGuest} from '../server/gateway-auth.mjs';
+import originalProducts from '../src/catalog.json' with {type:'json'};
+import {validateOrder,orderMessage} from '../server/catalogue.mjs';
 
 // The browser can reach only these public backend operations. Never forward
 // visitor cookies, identity headers, arbitrary URLs, or admin API requests.
@@ -11,7 +13,29 @@ export async function storefront(request,env=process.env,fetcher=fetch){
  if(path==='/admin'||path.startsWith('/admin/'))return new Response(null,{status:302,headers:{Location:BACKEND_ORIGIN+'/admin/','Cache-Control':'no-store'}});
  if(path.startsWith('/api/admin'))return json({error:'Open the private store admin to manage products and orders.'},403);
  const token=env.MDK_SITES_SERVICE_TOKEN,secret=env.STOREFRONT_GATEWAY_SECRET;
- if(!token||!secret||secret.length<32)return json({error:'The store connection has not been configured yet.'},503);
+ const hasBackend=Boolean(token&&secret&&secret.length>=32);
+ if(!hasBackend){
+  try{
+   if(path==='/api/orders'&&request.method==='POST'){
+    if(request.headers.get('origin')!==url.origin&&['cross-site'].includes(request.headers.get('sec-fetch-site')))return json({error:'Please submit this request from the store.'},403);
+    if(!request.headers.get('content-type')?.includes('application/json'))return json({error:'Send JSON data.'},415);
+    const raw=await request.text();if(raw.length>50000)return json({error:'Request is too large.'},413);
+    let body;try{body=JSON.parse(raw);}catch{return json({error:'Invalid request data.'},400);}
+    const order=validateOrder(body,originalProducts);
+    const reference='MDK-'+randomUUID().slice(0,8).toUpperCase();
+    return json({reference,whatsappUrl:'https://wa.me/923145851509?text='+encodeURIComponent(orderMessage({...order,reference}))},201);
+   }
+   if(path.startsWith('/media/'))return json({error:'Image not found.'},404);
+   if(path.startsWith('/api/')&&path!=='/api/catalog')return json({error:'Page not found.'},404);
+   if(!['GET','HEAD'].includes(request.method))return json({error:'Method not allowed.'},405);
+   if(path==='/api/catalog')return json(originalProducts,200);
+   const load=async()=>originalProducts;
+   return await route(new Request(url,{method:request.method}),{CATALOGUE:load})||json({error:'Page not found.'},404);
+  }catch(err){
+   if(err.status)return json({error:err.message},err.status);
+   return json({error:'The store is temporarily unavailable. Please try again shortly.'},503);
+  }
+ }
  async function upstream(endpoint,options={}){
   const response=await fetcher(BACKEND_ORIGIN+endpoint,{...options,headers:{'OAI-Sites-Authorization':'Bearer '+token,...options.headers},redirect:'error',signal:AbortSignal.timeout(15000)});
   const type=response.headers.get('content-type')||'';
