@@ -1,8 +1,9 @@
 import {ApiError,identity,requireAdmin,requireSameOrigin,catalogue,validateProduct,validateOrder,imageType,orderMessage,STOCK_STATUSES} from './catalogue.mjs';
 import {gatewayGuest} from './gateway-auth.mjs';
-import {hasAdminSession} from './password-auth.mjs';
+import {requireAdminSession} from './admin-auth.mjs';
+import {queueOrderEmails,flushEmails,orderEmail,passwordEmail} from './emails.mjs';
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
-async function readJSON(request){if(!request.headers.get('content-type')?.includes('application/json'))throw new ApiError(415,'Send JSON data.');const body=await request.text();if(body.length>50000)throw new ApiError(413,'Request is too large.');try{return JSON.parse(body)}catch{throw new ApiError(400,'Invalid request data.')}}
+async function readJSON(request){if(!request.headers.get('content-type')?.includes('application/json'))throw new ApiError(415,'Send JSON data.');const body=await request.text();if(body.length>50000)throw new ApiError(413,'Request is too large.');try{const value=JSON.parse(body);if(!value||typeof value!=='object'||Array.isArray(value))throw Error();return value;}catch{throw new ApiError(400,'Invalid request data.')}}
 export async function api(request,env){
  const path=new URL(request.url).pathname.replace(/\/$/,'');
  if(!path.startsWith('/api/')&&!path.startsWith('/media/'))return null;
@@ -14,8 +15,7 @@ export async function api(request,env){
   }
   if(path==='/api/catalog'&&request.method==='GET')return json(await catalogue(env.DB));
   if(path.startsWith('/api/admin/')){
-   const user=requireAdmin(request,env);
-   if(!env.ADMIN_PASSWORD_HASH||!env.ADMIN_SESSION_SECRET||!await hasAdminSession(request,user,env))throw new ApiError(401,'Your admin session is locked. Sign in with your private password.');
+   const user=await requireAdminSession(request,env);
    if(request.method!=='GET')requireSameOrigin(request);
    if(path==='/api/admin/me'&&request.method==='GET')return json({email:user.email,canEdit:true});
    if(path==='/api/admin/products'&&request.method==='GET')return json({products:await catalogue(env.DB,{all:true})});
@@ -48,6 +48,18 @@ export async function api(request,env){
     const input=await readJSON(request);if(!STOCK_STATUSES.includes(input.status)||typeof input.id!=='string'||!Number.isInteger(input.revision))throw new ApiError(400,'Choose a valid order status.');
     const result=await env.DB.prepare('UPDATE order_requests SET status=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?').bind(input.status,new Date().toISOString(),input.id,input.revision).run();if(!result.meta.changes)throw new ApiError(409,'The order changed elsewhere. Reload and try again.');return json({saved:true});
    }
+   if(path==='/api/admin/mail'&&request.method==='GET'){
+    const rows=await env.DB.prepare('SELECT status,count(*) as count FROM email_outbox GROUP BY status').all();
+    const recent=await env.DB.prepare('SELECT id,recipient,status,attempts,created_at,last_error FROM email_outbox ORDER BY created_at DESC LIMIT 20').all();
+    return json({configured:!!env.RESEND_API_KEY,sender:env.MAIL_FROM||'Store <admin@mdkelectronics.com>',counts:rows.results||[],recent:recent.results||[]});
+   }
+   if(path==='/api/admin/mail/retry'&&request.method==='POST'){await flushEmails(env);return json({saved:true});}
+   if(path==='/api/admin/mail-preview'&&request.method==='GET'){
+    const kind=new URL(request.url).searchParams.get('template');
+    const demo={reference:'PREVIEW',items:[{name:'Example product',quantity:1,unitPrice:3000,total:3000}],subtotal:3000,customer:{name:'Customer',phone:'',city:'',email:''}};
+    const message=kind==='password'?passwordEmail('https://www.mdkelectronics.com/admin/reset?token='+'0'.repeat(64)):orderEmail(demo);
+    return new Response(message.html,{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'",'Referrer-Policy':'no-referrer'}});
+   }
    throw new ApiError(404,'Admin action not found.');
   }
   if(path==='/api/orders'&&request.method==='POST'){
@@ -60,6 +72,7 @@ export async function api(request,env){
    const threshold=new Date(Date.now()-10*60*1000).toISOString();const recent=await env.DB.prepare('SELECT count(*) as count FROM order_requests WHERE owner_id=? AND created_at>?').bind(user.id,threshold).first();if(recent.count>=5)throw new ApiError(429,'Please wait before submitting another request.');
    const order=validateOrder(input,await catalogue(env.DB));const now=new Date().toISOString();const reference='MDK-'+crypto.randomUUID().slice(0,8).toUpperCase();
    await env.DB.prepare('INSERT INTO order_requests (id,owner_id,reference,payload,status,revision,created_at,updated_at) VALUES (?,?,?,?,\'pending\',1,?,?)').bind(input.requestId,user.id,reference,JSON.stringify(order),now,now).run();
+   try{await queueOrderEmails(env,{...order,reference},input.requestId);await flushEmails(env);}catch{console.error('Order email queue unavailable');}
    return json({reference,whatsappUrl:'https://wa.me/923145851509?text='+encodeURIComponent(orderMessage({...order,reference}))},201);
   }
   throw new ApiError(404,'Page not found.');

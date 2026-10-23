@@ -8,6 +8,13 @@
       "when": 1792772745953,
       "tag": "0000_glorious_leo",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1792783448706,
+      "tag": "0001_slow_warhawk",
+      "breakpoints": true
     }
   ]
 }

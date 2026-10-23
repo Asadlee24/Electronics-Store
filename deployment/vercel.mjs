@@ -1,6 +1,8 @@
 import {createHmac,randomUUID} from 'node:crypto';
 import {route} from '../server/router.mjs';
 import {signGuest} from '../server/gateway-auth.mjs';
+import {adminGatewayHeaders} from '../server/admin-auth.mjs';
+import {accessPage} from '../server/access-page.mjs';
 import originalProducts from '../src/catalog.json' with {type:'json'};
 import {validateOrder,orderMessage} from '../server/catalogue.mjs';
 
@@ -10,10 +12,29 @@ export const BACKEND_ORIGIN='https://mdk-electronics-preview.asadaly416.chatgpt.
 const json=(value,status)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
 export async function storefront(request,env=process.env,fetcher=fetch){
  const url=new URL(request.url),path=url.pathname.replace(/\/$/,'')||'/';
- if(path==='/admin'||path.startsWith('/admin/'))return new Response(null,{status:302,headers:{Location:BACKEND_ORIGIN+'/admin/','Cache-Control':'no-store'}});
- if(path.startsWith('/api/admin'))return json({error:'Open the private store admin to manage products and orders.'},403);
  const token=env.MDK_SITES_SERVICE_TOKEN,secret=env.STOREFRONT_GATEWAY_SECRET;
  const hasBackend=Boolean(token&&secret&&secret.length>=32);
+ if(path==='/admin'||path.startsWith('/admin/')||path.startsWith('/api/admin/')){
+  if(!token||!env.ADMIN_GATEWAY_SECRET||env.ADMIN_GATEWAY_SECRET.length<32)return new Response(accessPage({mode:'unavailable',message:'The owner connection is not configured yet.'}),{status:503,headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'}});
+  if(!['GET','HEAD','POST','PATCH'].includes(request.method))return json({error:'Method not allowed.'},405);
+  if(!['GET','HEAD'].includes(request.method)&&(request.headers.get('origin')!==url.origin||!['same-origin','none',null].includes(request.headers.get('sec-fetch-site'))))return json({error:'Please use the form on this site.'},403);
+  try{
+   const cookie=(request.headers.get('cookie')||'').split(';').map(x=>x.trim()).filter(x=>x.startsWith('__Host-store_admin=')).join('; ');
+   const contentType=request.headers.get('content-type')||'';
+   const raw=['GET','HEAD'].includes(request.method)?undefined:await request.arrayBuffer();
+   if(raw&&raw.byteLength>(path==='/api/admin/upload'?4*1024*1024:50000))return json({error:'Request is too large.'},413);
+   const signingRequest=new Request(url,{method:request.method,headers:{cookie,...(contentType?{'Content-Type':contentType}:{})},...(raw?{body:raw}:{})});
+   const client=createHmac('sha256',env.ADMIN_GATEWAY_SECRET).update(request.headers.get('x-vercel-forwarded-for')?.split(',')[0].trim()||'shared-visitor').digest('hex');
+   const signed=await adminGatewayHeaders(signingRequest,env.ADMIN_GATEWAY_SECRET,client);
+   const response=await fetcher(BACKEND_ORIGIN+url.pathname+url.search,{method:request.method,headers:{'OAI-Sites-Authorization':'Bearer '+token,cookie,...signed,...(contentType?{'Content-Type':contentType}:{}),Origin:BACKEND_ORIGIN,'Sec-Fetch-Site':'same-origin'},...(raw?{body:raw}:{}),redirect:'manual',signal:AbortSignal.timeout(20000)});
+   const headers=new Headers({'Content-Type':response.headers.get('content-type')||'text/plain','Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff'});
+   for(const name of ['set-cookie','content-security-policy','x-frame-options']){const value=response.headers.get(name);if(value)headers.set(name,value);}
+   const location=response.headers.get('location');
+   if(location){if(!location.startsWith('/admin')||location.startsWith('//'))throw Error('Unexpected admin redirect');headers.set('Location',location);}
+   return new Response(response.body,{status:response.status,headers});
+  }catch{return new Response(accessPage({mode:'unavailable',message:'Please try again shortly.'}),{status:503,headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'}});}
+ }
+
  if(!hasBackend){
   try{
    if(path==='/api/orders'&&request.method==='POST'){
@@ -23,7 +44,7 @@ export async function storefront(request,env=process.env,fetcher=fetch){
     let body;try{body=JSON.parse(raw);}catch{return json({error:'Invalid request data.'},400);}
     const order=validateOrder(body,originalProducts);
     const reference='MDK-'+randomUUID().slice(0,8).toUpperCase();
-    return json({reference,whatsappUrl:'https://wa.me/923145851509?text='+encodeURIComponent(orderMessage({...order,reference}))},201);
+    return json({saved:false,reference,whatsappUrl:'https://wa.me/923145851509?text='+encodeURIComponent(orderMessage({...order,reference}))},201);
    }
    if(path.startsWith('/media/'))return json({error:'Image not found.'},404);
    if(path.startsWith('/api/')&&path!=='/api/catalog')return json({error:'Page not found.'},404);
@@ -80,7 +101,7 @@ export default async function handler(req,res){
   const headers=new Headers();for(const [key,value] of Object.entries(req.headers))if(value!==undefined)headers.set(key,Array.isArray(value)?value.join(','):value);
   const host=headers.get('host');if(!host||!/^[-a-z0-9.:]+$/i.test(host))throw new Error('Invalid host');
   if(!req.url?.startsWith('/')||req.url.startsWith('//'))throw new Error('Invalid path');
-  let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>50000){res.statusCode=413;res.end('Request is too large.');return;}chunks.push(chunk);}
+  let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>(req.url?.startsWith('/api/admin/upload')?4*1024*1024:50000)){res.statusCode=413;res.end('Request is too large.');return;}chunks.push(chunk);}
   const request=new Request('https://'+host+req.url,{method:req.method,headers,...(!['GET','HEAD'].includes(req.method)?{body:Buffer.concat(chunks)}:{})});
   const response=await storefront(request);res.statusCode=response.status;response.headers.forEach((value,key)=>res.setHeader(key,value));res.end(req.method==='HEAD'?undefined:Buffer.from(await response.arrayBuffer()));
  }catch{res.statusCode=400;res.end('Invalid request.');}

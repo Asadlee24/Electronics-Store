@@ -11,6 +11,7 @@ const env={MDK_SITES_SERVICE_TOKEN:'local-test-token',STOREFRONT_GATEWAY_SECRET:
 const request=(path,method='GET',body,headers={})=>new Request('https://shop.test'+path,{method,headers:{...headers,...(method==='POST'?{Origin:'https://shop.test','Content-Type':'application/json'}:{})},...(body!==undefined?{body:JSON.stringify(body)}:{})});
 function backend(){
  const sqlite=new DatabaseSync(':memory:');sqlite.exec(fs.readFileSync(new URL('../drizzle/0000_glorious_leo.sql',import.meta.url),'utf8'));
+ sqlite.exec(fs.readFileSync(new URL('../drizzle/0001_slow_warhawk.sql',import.meta.url),'utf8'));
  const DB={prepare(sql){
   const stmt=sqlite.prepare(sql);let args=[];
   return{
@@ -42,8 +43,8 @@ test('Vercel checkout persists a guest request once using backend prices and enf
  assert.equal((await storefront(request('/api/orders','POST',order(),headers),env,b.fetcher)).status,429);b.sqlite.close();
 });
 test('public Vercel gateway cannot forward admin actions, visitor identity or arbitrary paths',async()=>{
- const b=backend();let r=await storefront(request('/admin/'),env,b.fetcher);assert.equal(r.status,302);assert.equal(r.headers.get('location'),BACKEND_ORIGIN+'/admin/');
- r=await storefront(request('/api/admin/products','POST',{}, {'oai-authenticated-user-id':'owner','oai-authenticated-user-email':'owner@example.test'}),env,b.fetcher);assert.equal(r.status,403);assert.equal(b.calls.length,0);
+ const b=backend();let r=await storefront(request('/admin/'),env,b.fetcher);assert.equal(r.status,503);assert.match(await r.text(),/owner connection/);
+ r=await storefront(request('/api/admin/products','POST',{}, {'oai-authenticated-user-id':'owner','oai-authenticated-user-email':'owner@example.test'}),env,b.fetcher);assert.equal(r.status,503);assert.equal(b.calls.length,0);
  assert.equal((await storefront(request('/api/private'),env,b.fetcher)).status,404);
  const req=request('/api/orders','POST',order());req.headers.set('origin','https://other.test');assert.equal((await storefront(req,env,b.fetcher)).status,403);assert.equal(b.calls.length,0);b.sqlite.close();
 });

@@ -82,7 +82,7 @@ $('#order-form')?.addEventListener('submit',async event=>{
   const response=await fetch('/api/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({requestId:orderAttempt.id,items:bag,details,consent:true})});
   const result=await response.json();if(!response.ok)throw new Error(result.error||'Could not save the request.');
   if(popup)popup.location=result.whatsappUrl;
-  status.innerHTML=`Request <strong>${esc(result.reference)}</strong> saved. <a href="${esc(result.whatsappUrl)}" target="_blank" rel="noopener">Continue on WhatsApp ${icon('upRight')}</a>.`;
+  status.innerHTML=`${result.saved===false?'Your order details are ready.':`Request <strong>${esc(result.reference)}</strong> saved.`} <a href="${esc(result.whatsappUrl)}" target="_blank" rel="noopener">Continue on WhatsApp ${icon('upRight')}</a>.`;
  }catch(error){if(popup)popup.close();status.textContent=error.message;}finally{button.disabled=false;button.innerHTML='Continue on WhatsApp '+icon('upRight');}
 });
 // Original photography, gently suspended in a perspective showroom.

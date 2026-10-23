@@ -6,7 +6,7 @@ A camera, audio and electronics storefront with a persistent store admin.
 
 **Admin:** https://mdk-electronics-preview.asadaly416.chatgpt.site/admin/
 
-The preview is private to its current owner. Sign in with the owner's ChatGPT account to access the admin.
+The backend preview is owner-private. The custom-domain admin uses an email and personal password. Set the initial password using the private email link on the login screen.
 
 ![MDK Electronics storefront](docs/storefront-desktop.jpg)
 
@@ -40,7 +40,7 @@ Historical WordPress orders, accounts and payment credentials were not imported.
 
 ## Runtime
 
-The persistent backend uses Sites Vinext/Cloudflare Workers, D1 and R2. The Vercel deployment is a Node.js storefront gateway to that same backend; it does not create a second database or a static copy of the catalogue. `/admin/` on Vercel opens the existing private admin, where ChatGPT sign-in still protects product management and customer data.
+The persistent backend uses Sites Vinext/Cloudflare Workers, D1 and R2. The Vercel deployment is a Node.js storefront gateway to that same backend; it does not create a second database or a static copy of the catalogue. `/admin/` stays on the custom domain and requires a personal password. Opaque eight-hour sessions are stored as hashes; resetting the password revokes existing sessions.
 
 ### Vercel deployment
 
@@ -52,12 +52,19 @@ Required Vercel server environment variables (production and preview):
 | --- | --- |
 | `MDK_SITES_SERVICE_TOKEN` | Private Sites service-access bearer token for this project's backend. Never a browser credential. |
 | `STOREFRONT_GATEWAY_SECRET` | At least 32 random characters, identical to the backend runtime secret of that name. |
+| `ADMIN_GATEWAY_SECRET` | Separate random server signing secret, identical to the backend runtime secret. |
 
 Configure those values through the hosting providers' secret settings. Do not put credentials in Git, browser JavaScript, or build artifacts. The backend must first be published with the gateway authentication code. Builds do not require secrets; runtime returns an explicit 503 until the connection is configured. A green build alone does not verify deployment readiness.
 
-The public Vercel gateway exposes only catalogue reads, validated uploaded photos, server-rendered store pages, and guest order submission. It never forwards admin actions or browser identity headers. Guest orders carry a short-lived, body-bound HMAC signature and use the existing backend price, stock, idempotency and rate-limit checks. They are guest requests, not authenticated ChatGPT users. Order requests remain unpaid pending requests, and no WhatsApp message is sent automatically.
+The storefront and admin use separate short-lived, request-bound HMAC signatures. Admin requests additionally require a valid owner password session. Incoming identity headers are stripped. Guest checkout saves unpaid pending requests; no WhatsApp message is sent automatically. Without the backend connection, checkout explicitly prepares a WhatsApp draft rather than claiming the request was saved.
 
-Admin edits appear on subsequent Vercel page loads and catalogue reads without rebuilding. Product photos remain in R2. The admin URL itself stays on the private backend origin.
+Admin edits appear on subsequent store reads. Product photos remain in R2.
+
+### Email and password recovery
+
+Set backend runtime secrets `RESEND_API_KEY`, `MAIL_FROM`, `STORE_ORIGIN`, `ADMIN_EMAIL` and `ADMIN_GATEWAY_SECRET`. The Resend key should be sending-only and restricted to the verified store domain. Password links are sent only to `ADMIN_EMAIL`, expire after 15 minutes and work once. Login and reset requests are rate-limited in D1.
+
+Order emails include a plain-text alternative, item totals and unpaid-request status. They use a persistent idempotent outbox. Submissions attempt delivery immediately; the admin Email section can retry failed queued messages. Provider acceptance does not prove inbox delivery. No marketing emails or delivery webhooks are configured.
 
 Validate locally with `node scripts/build-vercel.mjs` and `npm test`. Verify the hosted homepage, changed product, uploaded photo, private admin boundary and an authorized test checkout before switching domain DNS.
 

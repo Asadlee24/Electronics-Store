@@ -17,3 +17,32 @@ export const orderRequests = sqliteTable('order_requests', {
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull()
 });
+export const adminCredentials = sqliteTable('admin_credentials', {
+  id: integer('id').primaryKey(),
+  passwordHash: text('password_hash'),
+  revision: integer('revision').notNull().default(0),
+  resetHash: text('reset_hash'),
+  resetExpires: integer('reset_expires'),
+  resetSentAt: integer('reset_sent_at')
+});
+export const adminSessions = sqliteTable('admin_sessions', {
+  tokenHash: text('token_hash').primaryKey(),
+  revision: integer('revision').notNull(),
+  expiresAt: integer('expires_at').notNull()
+});
+export const adminAttempts = sqliteTable('admin_attempts', {
+  id: text('id').primaryKey(),
+  count: integer('count').notNull(),
+  expiresAt: integer('expires_at').notNull()
+});
+export const emailOutbox = sqliteTable('email_outbox', {
+  id: text('id').primaryKey(),
+  recipient: text('recipient').notNull(),
+  payload: text('payload').notNull(),
+  status: text('status').notNull(),
+  createdAt: integer('created_at').notNull(),
+  attempts: integer('attempts').notNull().default(0),
+  nextAttempt: integer('next_attempt'),
+  providerId: text('provider_id'),
+  lastError: text('last_error')
+});
