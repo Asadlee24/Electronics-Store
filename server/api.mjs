@@ -1,5 +1,6 @@
 import {ApiError,identity,requireAdmin,requireSameOrigin,catalogue,validateProduct,validateOrder,imageType,orderMessage,STOCK_STATUSES} from './catalogue.mjs';
 import {gatewayGuest} from './gateway-auth.mjs';
+import {hasAdminSession} from './password-auth.mjs';
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
 async function readJSON(request){if(!request.headers.get('content-type')?.includes('application/json'))throw new ApiError(415,'Send JSON data.');const body=await request.text();if(body.length>50000)throw new ApiError(413,'Request is too large.');try{return JSON.parse(body)}catch{throw new ApiError(400,'Invalid request data.')}}
 export async function api(request,env){
@@ -14,6 +15,7 @@ export async function api(request,env){
   if(path==='/api/catalog'&&request.method==='GET')return json(await catalogue(env.DB));
   if(path.startsWith('/api/admin/')){
    const user=requireAdmin(request,env);
+   if(!env.ADMIN_PASSWORD_HASH||!env.ADMIN_SESSION_SECRET||!await hasAdminSession(request,user,env))throw new ApiError(401,'Your admin session is locked. Sign in with your private password.');
    if(request.method!=='GET')requireSameOrigin(request);
    if(path==='/api/admin/me'&&request.method==='GET')return json({email:user.email,canEdit:true});
    if(path==='/api/admin/products'&&request.method==='GET')return json({products:await catalogue(env.DB,{all:true})});
