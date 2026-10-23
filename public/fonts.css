@@ -1,0 +1,2 @@
+/* System typography keeps the storefront fast and avoids third-party font requests. */
+@font-face{font-family:'MDK Sans';src:local('Arial');font-style:normal;font-weight:100 900;font-display:swap}

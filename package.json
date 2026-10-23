@@ -1,0 +1,14 @@
+{
+  "name": "mdk-electronics",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MDK Electronics — an independent, product-first storefront",
+  "scripts": {
+    "dev": "node scripts/serve.mjs",
+    "build": "node scripts/build.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "sync:wordpress": "python3 scripts/import-wordpress.py"
+  },
+  "engines": { "node": ">=20" }
+}
