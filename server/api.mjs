@@ -1,4 +1,5 @@
 import {ApiError,identity,requireAdmin,requireSameOrigin,catalogue,validateProduct,validateOrder,imageType,orderMessage,STOCK_STATUSES} from './catalogue.mjs';
+import {gatewayGuest} from './gateway-auth.mjs';
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
 async function readJSON(request){if(!request.headers.get('content-type')?.includes('application/json'))throw new ApiError(415,'Send JSON data.');const body=await request.text();if(body.length>50000)throw new ApiError(413,'Request is too large.');try{return JSON.parse(body)}catch{throw new ApiError(400,'Invalid request data.')}}
 export async function api(request,env){
@@ -48,8 +49,10 @@ export async function api(request,env){
    throw new ApiError(404,'Admin action not found.');
   }
   if(path==='/api/orders'&&request.method==='POST'){
-   requireSameOrigin(request);const user=identity(request);if(!user)throw new ApiError(401,'Sign in before submitting your request.');
-   const input=await readJSON(request);if(typeof input.requestId!=='string'||!/^[a-f0-9-]{36}$/.test(input.requestId))throw new ApiError(400,'Invalid request reference.');
+   requireSameOrigin(request);
+   const input=await readJSON(request);
+   const user=request.headers.has('x-mdk-guest')?await gatewayGuest(request,env,JSON.stringify(input)):identity(request);if(!user)throw new ApiError(401,'Sign in before submitting your request.');
+   if(typeof input.requestId!=='string'||!/^[a-f0-9-]{36}$/.test(input.requestId))throw new ApiError(400,'Invalid request reference.');
    const previous=await env.DB.prepare('SELECT owner_id,reference,payload FROM order_requests WHERE id=?').bind(input.requestId).first();
    if(previous){if(previous.owner_id!==user.id)throw new ApiError(409,'Use a new order reference.');const order={...JSON.parse(previous.payload),reference:previous.reference};return json({reference:order.reference,whatsappUrl:'https://wa.me/923145851509?text='+encodeURIComponent(orderMessage(order))});}
    const threshold=new Date(Date.now()-10*60*1000).toISOString();const recent=await env.DB.prepare('SELECT count(*) as count FROM order_requests WHERE owner_id=? AND created_at>?').bind(user.id,threshold).first();if(recent.count>=5)throw new ApiError(429,'Please wait before submitting another request.');

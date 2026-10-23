@@ -40,7 +40,26 @@ Historical WordPress orders, accounts and payment credentials were not imported.
 
 ## Runtime
 
-This version uses the Sites Vinext/Cloudflare Workers integration, D1 and R2. It is no longer a static-only Vercel site. The earlier static-only deployment configuration was removed so it cannot accidentally publish an incomplete admin.
+The persistent backend uses Sites Vinext/Cloudflare Workers, D1 and R2. The Vercel deployment is a Node.js storefront gateway to that same backend; it does not create a second database or a static copy of the catalogue. `/admin/` on Vercel opens the existing private admin, where ChatGPT sign-in still protects product management and customer data.
+
+### Vercel deployment
+
+`vercel.json` disables Next.js framework detection and runs `node scripts/build-vercel.mjs`. This writes the native Vercel Build Output API bundle under `.vercel/output`, containing a Node.js 22 function and an allowlist of public assets. Do not set the Framework Preset to Next.js or the Output Directory to `.next`: Vinext does not emit Next.js manifests. The ordinary `npm run build` remains the Sites Worker build.
+
+Required Vercel server environment variables (production and preview):
+
+| Key | Purpose |
+| --- | --- |
+| `MDK_SITES_SERVICE_TOKEN` | Private Sites service-access bearer token for this project's backend. Never a browser credential. |
+| `STOREFRONT_GATEWAY_SECRET` | At least 32 random characters, identical to the backend runtime secret of that name. |
+
+Configure those values through the hosting providers' secret settings. Do not put credentials in Git, browser JavaScript, or build artifacts. The backend must first be published with the gateway authentication code. Builds do not require secrets; runtime returns an explicit 503 until the connection is configured. A green build alone does not verify deployment readiness.
+
+The public Vercel gateway exposes only catalogue reads, validated uploaded photos, server-rendered store pages, and guest order submission. It never forwards admin actions or browser identity headers. Guest orders carry a short-lived, body-bound HMAC signature and use the existing backend price, stock, idempotency and rate-limit checks. They are guest requests, not authenticated ChatGPT users. Order requests remain unpaid pending requests, and no WhatsApp message is sent automatically.
+
+Admin edits appear on subsequent Vercel page loads and catalogue reads without rebuilding. Product photos remain in R2. The admin URL itself stays on the private backend origin.
+
+Validate locally with `node scripts/build-vercel.mjs` and `npm test`. Verify the hosted homepage, changed product, uploaded photo, private admin boundary and an authorized test checkout before switching domain DNS.
 
 Requirements: Node.js 24 for the full test suite, or Node.js 22.13+ for the application runtime, with npm.
 

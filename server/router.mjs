@@ -12,7 +12,7 @@ export async function route(request,env){
  if(request.method!=='GET'&&request.method!=='HEAD')return null;
  if(/\.(css|js|mjs|png|jpe?g|webp|svg|ico|woff2?)$/.test(path)||path.startsWith('/@')||path.startsWith('/node_modules/'))return null;
  try{
-  const products=await catalogue(env.DB),routePath=path.replace(/\/$/,'')||'/';
+  const products=env.CATALOGUE?await env.CATALOGUE():await catalogue(env.DB),routePath=path.replace(/\/$/,'')||'/';
   if(path==='/sitemap.xml'){const paths=['/','/shop/','/contact-us/',...informationPages.map(p=>'/'+p.slug+'/'),...products.map(p=>'/product/'+p.slug+'/')];return new Response('<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'+paths.map(p=>'<url><loc>'+url.origin+p+'</loc></url>').join('')+'</urlset>',{headers:{'Content-Type':'application/xml'}});}
   if(path==='/catalog.json')return new Response(JSON.stringify(products),{headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
   let title,content,selected,status=200;
