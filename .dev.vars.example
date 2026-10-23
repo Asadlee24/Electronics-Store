@@ -1,0 +1,2 @@
+# Local configuration only. Real hosted values belong in Sites runtime secrets.
+ADMIN_EMAIL=owner@example.test

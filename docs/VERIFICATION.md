@@ -1,41 +1,41 @@
 # Verification — 23 October 2026
 
-## Automated
+## Current story
 
-`npm run build` emits 21 routes plus `404.html` from the imported catalogue and policies.
+A store owner edits a product through the admin; the browser submits to the protected API, D1 saves the product revision, and the storefront renders the new price/availability. Uploads are stored in R2 and served back as product images. Checkout requests are validated and stored for admin review before the customer continues to WhatsApp.
 
-`npm test` covers nine meaningful cases:
+## Automated checks
 
-1. Reject malformed, unknown and unavailable cart entries.
-2. Cap quantities and calculate totals from catalogue prices.
-3. Combine search, categories and stock filtering.
-4. Combine wishlist filtering with price sorting.
-5. Produce exact WhatsApp order-request lines and pending-confirmation wording.
-6. Preserve imported product counts, original key prices and out-of-stock status.
-7. Verify every local gallery asset exists.
-8. Reject active imported HTML and retain the seven-day return policy.
-9. Verify every internal generated link/asset resolves and every page has one primary heading.
+19 tests pass. The original nine catalogue/cart/link tests remain, plus ten server and persistence tests covering:
 
-JavaScript syntax checks and `git diff --check` also pass.
+- Anonymous, non-owner and cross-origin admin access rejection.
+- Persistent product edits and stale revision rejection.
+- Draft visibility and duplicate product URL rejection.
+- Description escaping and photo type/path validation.
+- Server-authoritative request pricing and quantities.
+- Idempotent requests and rate limiting.
+- Persistent request status changes and stale status rejection.
+- No customer data in anonymous admin responses.
+
+The tests execute the actual schema and SQL using SQLite through a D1-shaped adapter. The production Worker build passes.
 
 ## Browser checks
 
-- Homepage and original photography render at desktop width.
-- Hero cutout renders with a transparent background; original gallery photography is retained.
-- Adding Hikvision to the bag, increasing quantity to two, and continuing to the order form shows a **Rs. 6,000** product subtotal.
-- Cart state persists between pages.
-- Audio category shows one out-of-stock speaker; its add button is disabled.
-- In-stock-only filtering produces an empty state; reset restores the collection.
-- Live Hikvision search and saving the product populate the wishlist.
-- A 390px mobile viewport renders without horizontal overflow; mobile navigation opens as a native modal.
+- The shorter desktop and 390px storefront render without horizontal overflow.
+- The protected `/admin/` page requires sign-in when no owner identity is present.
+- An isolated local QA page supplies a synthetic owner identity to the local backend only. The production admin guard remains enabled.
+- Through the actual admin UI, Hikvision was changed from Rs. 3,000 to Rs. 3,100 and marked unavailable. A fresh storefront page showed Rs. 3,100 and a disabled out-of-stock button. Original price and stock were restored through the UI.
+- An original camera JPEG was uploaded through the file chooser. R2 returned a `/media/…jpg` URL, and the resulting image loaded successfully in the editor. It was not saved to the product gallery.
+- Product search, editor fields, category/visibility controls, photo removal, desktop navigation and the mobile editor were checked.
+- Mobile admin tables keep scrolling inside the table, and the page itself does not overflow.
 
-No live order, WhatsApp message or payment was submitted.
+QA files and local test identity are excluded from publication. No production customer request, WhatsApp message or payment was submitted.
 
-## Limits
+## Deployment limits
 
-- This is a public storefront/catalogue migration, not a WordPress database, customer, order or payment migration.
-- Checkout prepares a WhatsApp request for the buyer to send and the shop to confirm.
-- Catalogue/inventory is an imported snapshot, not a live stock service.
-- Historical WordPress accounts remain on the original site. Domain cutover must preserve or relocate WordPress if those links are still needed.
-- The deployment configuration is included; the original site's DNS has not been changed.
-- Device QA uses a narrow browser frame, not a physical phone.
+- The live app runs on Sites with D1/R2 and dispatch-owned ChatGPT identity; it is no longer a static-only Vercel deployment.
+- The private audience is preserved, with owner-only admin authorization in the application.
+- Historical WordPress customers, accounts and orders are not imported.
+- Request status is not a payment receipt. Payments and delivery fees remain manually confirmed.
+- The order list shows the latest 100 requests.
+- The hosted owner's interactive sign-in is left to the owner's browser. Local owner writes and persistence were verified without weakening hosted authentication.

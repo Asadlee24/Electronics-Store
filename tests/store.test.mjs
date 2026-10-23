@@ -40,10 +40,10 @@ test('imported descriptions and policies contain only inert semantic HTML',()=>{
  const returns=pages.find(x=>x.slug==='return-refund-policy');assert.match(returns.content,/7 days/);assert.doesNotMatch(returns.content,/30 days/);
 });
 test('every internal href and asset in the built storefront resolves',()=>{
- const root=new URL('../dist/',import.meta.url),all=[];
+ const root=new URL('../dist-static/',import.meta.url),all=[];
  function walk(dir){for(const entry of fs.readdirSync(dir,{withFileTypes:true})){const file=path.join(dir,entry.name);if(entry.isDirectory())walk(file);else if(entry.name.endsWith('.html'))all.push(file)}}
  walk(root.pathname);assert.ok(all.length>=22);
  for(const file of all){const html=fs.readFileSync(file,'utf8');for(const match of html.matchAll(/(?:href|src)="(\/[^"#]*)"/g)){
-  const pathname=match[1].split('?')[0];const local=path.join(root.pathname,pathname,pathname.endsWith('/')?'index.html':'');assert.ok(fs.existsSync(local),`${path.relative(root.pathname,file)} points to missing ${pathname}`);
+  const pathname=match[1].split('?')[0];if(pathname==='/admin/')continue;const local=path.join(root.pathname,pathname,pathname.endsWith('/')?'index.html':'');assert.ok(fs.existsSync(local),`${path.relative(root.pathname,file)} points to missing ${pathname}`);
  }assert.equal((html.match(/<h1\b/g)||[]).length,1,`${file} needs one primary heading`)}
 });

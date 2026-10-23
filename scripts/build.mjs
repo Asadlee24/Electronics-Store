@@ -3,7 +3,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {shell,home,shop,product,checkout,contact,information,notFound} from '../src/render.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
-const out=path.join(root,'dist');
+const out=path.join(root,'dist-static');
 const products=JSON.parse(await fs.readFile(path.join(root,'src/catalog.json'),'utf8'));
 const pages=JSON.parse(await fs.readFile(path.join(root,'src/pages.json'),'utf8'));
 const origin=(process.env.SITE_URL||'').replace(/\/$/,'');

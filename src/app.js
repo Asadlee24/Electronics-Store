@@ -1,6 +1,6 @@
 import {normalizeBag, bagTotal, filterProducts, orderMessage, MAX_QUANTITY} from '/store.mjs';
 import {icon, money, esc} from '/ui.mjs';
-const products = await fetch('/catalog.json').then(r=>{if(!r.ok)throw new Error('Cannot load products');return r.json()}).catch(()=>[]);
+const products = await fetch('/api/catalog', {cache:'no-store'}).then(r=>{if(!r.ok)throw new Error('Cannot load products');return r.json()}).catch(()=>[]);
 const $ = (selector,root=document)=>root.querySelector(selector);
 const $$ = (selector,root=document)=>[...root.querySelectorAll(selector)];
 function load(key,fallback){try{return JSON.parse(localStorage.getItem(key))??fallback}catch{return fallback}}
@@ -18,8 +18,8 @@ function lineItem(item,compact=false){const p=products.find(p=>p.id===item.id);i
 function totals(){return `<div class="total-line"><span>Product subtotal</span><strong>${money(bagTotal(bag,products))}</strong></div><div class="total-line muted"><span>Delivery</span><span>Confirmed by our team</span></div><p class="small muted">Final availability, delivery charges and payment are confirmed on WhatsApp.</p>`}
 function renderBag(){
  const count=bag.reduce((s,x)=>s+x.quantity,0);$$('.bag-count').forEach(e=>e.textContent=count);
- $('#bag-items').innerHTML=bag.length?bag.map(x=>lineItem(x)).join(''):`<div class="empty-state">${icon('bag')}<h3>A little room for something good.</h3><p>Your bag is empty. Find your next upgrade.</p><a class="button dark" href="/shop/">Explore the collection ${icon('arrow')}</a></div>`;
- $('#bag-summary').innerHTML=bag.length?`${totals()}<a class="button dark" href="/checkout/">Request your order ${icon('arrow')}</a><button class="continue-shopping" data-close-dialog>Continue exploring</button>`:'';
+ $('#bag-items').innerHTML=bag.length?bag.map(x=>lineItem(x)).join(''):`<div class="empty-state">${icon('bag')}<h3>Your cart is empty.</h3><p>Add products to get started.</p><a class="button dark" href="/shop/">Shop products ${icon('arrow')}</a></div>`;
+ $('#bag-summary').innerHTML=bag.length?`${totals()}<a class="button dark" href="/checkout/">Request your order ${icon('arrow')}</a><button class="continue-shopping" data-close-dialog>Continue shopping</button>`:'';
  if($('#checkout-items')){
   $('#checkout-items').innerHTML=bag.map(x=>lineItem(x,true)).join('');$('#checkout-totals').innerHTML=totals();$('#checkout-layout').hidden=!bag.length;$('#checkout-empty').hidden=!!bag.length;
  }
@@ -71,13 +71,26 @@ $$('[data-gallery]').forEach(b=>b.addEventListener('click',()=>{const image=$('#
 for(const [selector,delta] of [['#product-minus',-1],['#product-plus',1]])$(selector)?.addEventListener('click',()=>{const input=$('#product-quantity');input.value=Math.max(1,Math.min(MAX_QUANTITY,(Number(input.value)||1)+delta))});
 $('#product-quantity')?.addEventListener('change',e=>{e.target.value=Math.max(1,Math.min(MAX_QUANTITY,Math.floor(Number(e.target.value)||1)))});
 // The buyer reviews and sends the request themselves; no order or payment is fabricated.
-$('#order-form')?.addEventListener('submit',event=>{event.preventDefault();if(!event.target.reportValidity())return;const details=Object.fromEntries(new FormData(event.target));const message=orderMessage(bag,products,details);const url='https://wa.me/923145851509?text='+encodeURIComponent(message);const next=document.createElement('a');next.href=url;next.target='_blank';next.rel='noopener';next.click();$('#order-status').innerHTML=`Your order request is ready. <a href="${esc(url)}" target="_blank" rel="noopener">Open WhatsApp again ${icon('upRight')}</a>. Review the message and send it to MDK to continue.`;});
+let orderAttempt=null;
+$('#order-form')?.addEventListener('submit',async event=>{
+ event.preventDefault();if(!event.target.reportValidity())return;
+ const details=Object.fromEntries(new FormData(event.target));const signature=JSON.stringify({bag,details});
+ if(!orderAttempt||orderAttempt.signature!==signature)orderAttempt={signature,id:crypto.randomUUID()};
+ const button=event.target.querySelector('button[type="submit"]'),status=$('#order-status');button.disabled=true;button.textContent='Saving request…';status.textContent='';
+ const popup=window.open('about:blank','_blank');if(popup)popup.opener=null;
+ try{
+  const response=await fetch('/api/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({requestId:orderAttempt.id,items:bag,details,consent:true})});
+  const result=await response.json();if(!response.ok)throw new Error(result.error||'Could not save the request.');
+  if(popup)popup.location=result.whatsappUrl;
+  status.innerHTML=`Request <strong>${esc(result.reference)}</strong> saved. <a href="${esc(result.whatsappUrl)}" target="_blank" rel="noopener">Continue on WhatsApp ${icon('upRight')}</a>.`;
+ }catch(error){if(popup)popup.close();status.textContent=error.message;}finally{button.disabled=false;button.innerHTML='Continue on WhatsApp '+icon('upRight');}
+});
 // Original photography, gently suspended in a perspective showroom.
 const showroom=$('#showroom');
 const reducedMotion=window.matchMedia('(prefers-reduced-motion: reduce)');
 let frame=0;
 showroom?.addEventListener('pointermove',event=>{if(reducedMotion.matches||event.pointerType==='touch')return;cancelAnimationFrame(frame);frame=requestAnimationFrame(()=>{const r=showroom.getBoundingClientRect();const x=(event.clientX-r.left)/r.width-.5;const y=(event.clientY-r.top)/r.height-.5;showroom.style.setProperty('--rx',`${-y*10}deg`);showroom.style.setProperty('--ry',`${x*14}deg`);showroom.style.setProperty('--mx',`${x*15}px`);showroom.style.setProperty('--my',`${y*12}px`);})});
 showroom?.addEventListener('pointerleave',()=>{cancelAnimationFrame(frame);['--rx','--ry','--mx','--my'].forEach(key=>showroom.style.removeProperty(key))});
-const slides={737:{name:'Hikvision 2MP',kicker:'YOUR SPACE. IN FOCUS.',color:'#dedfd3',index:'01 / THE EVERYDAY UPGRADE',outline:'SEE<br>CLEARER.'},842:{name:'Mini Handy Cam',kicker:'CAPTURE THE EVERYDAY.',color:'#e5d6c5',index:'02 / KEEP THE MOMENT',outline:'MORE<br>MOMENTS.'},571:{name:'W-KING T9 Pro',kicker:'TURN UP THE MOMENT.',color:'#dcd5e7',index:'03 / GOOD SOUND. GOOD TIMES.',outline:'SOUND<br>ON.'}};
-$$('[data-slide]').forEach(b=>b.addEventListener('click',()=>{const id=Number(b.dataset.slide),p=products.find(x=>x.id===id),s=slides[id];if(!p)return;const hero=$('#hero-product');hero.classList.remove('product-enter');void hero.offsetWidth;hero.classList.add('product-enter');$('#hero-image').src=id===737?'/images/hikvision-hero-v2.png':p.images[0];hero.classList.toggle('has-source-photo',id!==737);$('#hero-image').alt=p.name;$('#hero-name').textContent=s.name;$('#hero-price').textContent=money(p.price);$('#hero-kicker').textContent=s.kicker;$('#hero-link').href='/product/'+p.slug+'/';$('#hero-category').textContent=p.categories[0].toUpperCase();$('.showroom-index').textContent=s.index;$('.hero-outline').innerHTML=s.outline;showroom.style.setProperty('--scene',s.color);$$('[data-slide]').forEach(dot=>{dot.classList.toggle('active',dot===b);dot.setAttribute('aria-pressed',String(dot===b))})}));
+const slides={737:{name:'Hikvision 2MP Camera',kicker:'CCTV CAMERA',color:'#dedfd3',index:'01 / CCTV CAMERAS',outline:'2MP'},842:{name:'Mini Handy Cam',kicker:'1080P CAMERA',color:'#e5d6c5',index:'02 / COMPACT CAMERAS',outline:'1080P'},571:{name:'W-KING T9 Pro',kicker:'BLUETOOTH SPEAKER',color:'#dcd5e7',index:'03 / AUDIO',outline:'T9'}};
+$$('[data-slide]').forEach(b=>b.addEventListener('click',()=>{const id=Number(b.dataset.slide),p=products.find(x=>x.id===id),s=slides[id];if(!p)return;const hero=$('#hero-product');hero.classList.remove('product-enter');void hero.offsetWidth;hero.classList.add('product-enter');$('#hero-image').src=id===737&&p.images[0]==='/images/737-0.jpg'?'/images/hikvision-hero-v2.png':p.images[0];hero.classList.toggle('has-source-photo',id!==737||p.images[0]!=='/images/737-0.jpg');$('#hero-image').alt=p.name;$('#hero-name').textContent=p.name;$('#hero-price').textContent=money(p.price);$('#hero-kicker').textContent=s.kicker;$('#hero-link').href='/product/'+p.slug+'/';$('#hero-category').textContent=p.categories[0].toUpperCase();$('.showroom-index').textContent=s.index;$('.hero-outline').innerHTML=s.outline;showroom.style.setProperty('--scene',s.color);$$('[data-slide]').forEach(dot=>{dot.classList.toggle('active',dot===b);dot.setAttribute('aria-pressed',String(dot===b))})}));
 renderBag();renderWishlist();applyFilters();
