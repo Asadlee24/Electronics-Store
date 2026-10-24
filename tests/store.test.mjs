@@ -26,8 +26,8 @@ test('order requests contain real products, exact subtotal and pending confirmat
  assert.match(message,/2 × Hikvision 2MP Camera/);assert.match(message,/Product subtotal: Rs\. 6,000/);assert.match(message,/Name: Buyer Injected/);assert.match(message,/pending confirmation/);assert.match(message,/Please confirm availability, delivery charges/);
  assert.throws(()=>orderMessage([],products,{}),/empty/);
 });
-test('the import preserves nine electronics listings and original prices and stock',()=>{
- assert.equal(products.length,9);assert.equal(buy.price,3000);assert.equal(sold.price,15000);assert.equal(sold.inStock,false);assert.equal(products.find(x=>x.id===921).price,10999);
+test('the catalogue preserves imported listings and adds the three supplied featured products',()=>{
+ assert.equal(products.length,12);assert.equal(buy.price,3000);assert.equal(sold.price,15000);assert.equal(sold.inStock,false);assert.equal(products.find(x=>x.id===921).price,10999);
  assert.equal(products.some(x=>x.id===832),false);assert.equal(new Set(products.map(x=>x.slug)).size,products.length);
 });
 test('every imported gallery image exists locally',()=>{

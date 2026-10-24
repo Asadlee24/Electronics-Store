@@ -183,3 +183,18 @@ test('contact signatures are scoped separately from orders and failed mail remai
  headers['x-mdk-signature']=await signGuest(f.backend.STOREFRONT_GATEWAY_SECRET,id,time,'contact\n'+body);assert.equal((await route(new Request(BACKEND_ORIGIN+'/api/orders',{method:'POST',headers,body}),f.backend)).status,401);
  const original=f.backend.MAIL_FETCH;f.backend.MAIL_FETCH=async()=>Response.json({name:'rate_limit_exceeded'},{status:429});assert.equal((await f.call('/api/contact',{method:'POST',body:input})).status,201);assert.equal(f.sqlite.prepare("SELECT count(*) as n FROM email_outbox WHERE status='failed'").get().n,1);f.sqlite.prepare('UPDATE email_outbox SET next_attempt=0').run();f.backend.MAIL_FETCH=original;await flushEmails(f.backend);assert.equal(f.messages.length,1);assert.equal(f.sqlite.prepare("SELECT count(*) as n FROM email_activity WHERE purpose='contact' AND status='accepted'").get().n,1);f.sqlite.close();
 });
+
+test('homepage slides persist owner edits with revision checks and hide unpublished products',async()=>{
+ const f=fixture();f.seed();assert.equal((await f.call('/api/admin/hero')).status,401);
+ const initial=await(await f.call('/api/hero')).json();assert.equal(initial.slides.length,6);assert.deepEqual(initial.slides.slice(0,3).map(s=>s.productId),[1001,1002,1003]);
+ const cookie=await login(f);const slides=[...initial.slides].reverse();slides[0].enabled=false;slides[1].kicker='Owner selection';
+ const saved=await f.call('/api/admin/hero',{cookie,method:'POST',body:{slides,revision:initial.revision}});assert.equal(saved.status,200);const config=await saved.json();assert.equal(config.revision,1);
+ assert.deepEqual((await(await f.call('/api/hero')).json()).slides,slides);
+ assert.equal((await f.call('/api/admin/hero',{cookie,method:'POST',body:initial})).status,409);
+ assert.equal((await f.call('/api/admin/hero',{cookie,method:'POST',body:{slides:slides.map(s=>({...s,image:'https://evil.test/a.png'})),revision:1}})).status,400);
+ assert.equal((await f.call('/api/admin/hero',{cookie,method:'POST',body:{slides:slides.map(s=>({...s,enabled:false})),revision:1}})).status,400);
+ const page=await(await f.call('/')).text();assert.match(page,/Owner selection/);assert.doesNotMatch(page,/data-slide="571"/);
+ const all=await(await f.call('/api/admin/products',{cookie})).json();const p=all.products.find(p=>p.id===1002);
+ f.sqlite.prepare('INSERT INTO catalogue_products (id,slug,payload,revision,updated_at,updated_by) VALUES (?,?,?,1,?,?)').run(p.id,p.slug,JSON.stringify({...p,active:false}),new Date().toISOString(),'test');
+ assert.doesNotMatch(await(await f.call('/')).text(),/data-slide="1002"/);f.sqlite.close();
+});

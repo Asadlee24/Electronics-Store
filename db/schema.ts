@@ -72,3 +72,5 @@ export const contactMessages = sqliteTable('contact_messages', {
   payload: text('payload').notNull(),
   createdAt: text('created_at').notNull()
 });
+
+export const heroSettings = sqliteTable('hero_settings', {id:integer('id').primaryKey(),payload:text('payload').notNull(),revision:integer('revision').notNull().default(1)});

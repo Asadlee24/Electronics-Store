@@ -1,6 +1,7 @@
 import informationPages from '../src/pages.json' with {type:'json'};
 import {shell,home,shop,product,checkout,contact,information,notFound} from '../src/render.mjs';
 import {api} from './api.mjs';
+import {heroSettings} from './hero.mjs';
 import {catalogue} from './catalogue.mjs';
 import {adminRoute} from './admin-routes.mjs';
 const html=(body,status=200)=>new Response(body,{status,headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'strict-origin-when-cross-origin','X-Frame-Options':'SAMEORIGIN'}});
@@ -16,7 +17,7 @@ export async function route(request,env){
   if(path==='/sitemap.xml'){const paths=['/','/shop/','/contact-us/',...informationPages.map(p=>'/'+p.slug+'/'),...products.map(p=>'/product/'+p.slug+'/')];return new Response('<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'+paths.map(p=>'<url><loc>'+url.origin+p+'</loc></url>').join('')+'</urlset>',{headers:{'Content-Type':'application/xml'}});}
   if(path==='/catalog.json')return new Response(JSON.stringify(products),{headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
   let title,content,selected,status=200;
-  if(routePath==='/'){title='Cameras, audio & electronics';content=home(products)}
+  if(routePath==='/'){title='Cameras, audio & electronics';content=home(products,(env.HERO?await env.HERO():await heroSettings(env.DB)).slides)}
   else if(routePath==='/shop'){title='Shop';content=shop(products)}
   else if(['/wishlist','/wishlist-2'].includes(routePath)){title='Wishlist';content=shop(products,true)}
   else if(['/checkout','/cart'].includes(routePath)){title='Order request';content=checkout()}

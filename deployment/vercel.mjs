@@ -70,7 +70,8 @@ export async function storefront(request,env=process.env,fetcher=fetch){
     return json({saved:false,reference,whatsappUrl:'https://wa.me/923145851509?text='+encodeURIComponent(orderMessage({...order,reference}))},201);
    }
    if(path.startsWith('/media/'))return json({error:'Image not found.'},404);
-   if(path.startsWith('/api/')&&path!=='/api/catalog')return json({error:'Page not found.'},404);
+   if(path==='/api/hero'&&request.method==='GET')return upstream('/api/hero');
+  if(path.startsWith('/api/')&&path!=='/api/catalog')return json({error:'Page not found.'},404);
    if(!['GET','HEAD'].includes(request.method))return json({error:'Method not allowed.'},405);
    if(path==='/api/catalog')return json(originalProducts,200);
    const load=async()=>originalProducts;
@@ -108,6 +109,7 @@ export async function storefront(request,env=process.env,fetcher=fetch){
    if(request.method!=='GET'||!/^\/media\/[a-f0-9-]{36}\.(?:jpg|png|webp)$/.test(path))return json({error:'Image not found.'},404);
    const response=await upstream(path);return new Response(response.body,{status:response.status,headers:{'Content-Type':response.headers.get('content-type')||'application/octet-stream','Cache-Control':'public, max-age=31536000, immutable','X-Content-Type-Options':'nosniff'}});
   }
+  if(path==='/api/hero'&&request.method==='GET')return upstream('/api/hero');
   if(path.startsWith('/api/')&&path!=='/api/catalog')return json({error:'Page not found.'},404);
   if(!['GET','HEAD'].includes(request.method))return json({error:'Method not allowed.'},405);
   let data;
@@ -115,7 +117,7 @@ export async function storefront(request,env=process.env,fetcher=fetch){
   if(path==='/api/catalog')return json(await load(),200);
   // Strip all inbound headers before invoking the shared renderer. Admin
   // identity remains exclusively owned by the private Sites deployment.
-  return await route(new Request(url,{method:request.method}),{CATALOGUE:load})||json({error:'Page not found.'},404);
+  return await route(new Request(url,{method:request.method}),{CATALOGUE:load,HERO:async()=>{try{const response=await upstream('/api/hero');if(!response.ok)throw Error();return await response.json()}catch{return {slides:undefined}}}})||json({error:'Page not found.'},404);
  }catch{return json({error:'The store is temporarily unavailable. Please try again shortly.'},503);}
 }
 

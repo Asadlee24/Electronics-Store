@@ -1,0 +1,50 @@
+[
+  {
+    "productId": 1001,
+    "image": "/images/charger-hero-v1.png",
+    "kicker": "CHARGER CAMERA",
+    "outline": "COMPACT",
+    "color": "#dedfd3",
+    "enabled": true
+  },
+  {
+    "productId": 1002,
+    "image": "/images/rectangle-clock-hero-v1.png",
+    "kicker": "CLOCK CAMERA",
+    "outline": "LED",
+    "color": "#d4e2e2",
+    "enabled": true
+  },
+  {
+    "productId": 1003,
+    "image": "/images/round-clock-hero-v1.png",
+    "kicker": "WALL CLOCK CAMERA",
+    "outline": "TIME",
+    "color": "#d9dce9",
+    "enabled": true
+  },
+  {
+    "productId": 737,
+    "image": "/images/hikvision-hero-v2.png",
+    "kicker": "CCTV CAMERA",
+    "outline": "2MP",
+    "color": "#dedfd3",
+    "enabled": true
+  },
+  {
+    "productId": 842,
+    "image": "/images/handycam-hero-v2.png",
+    "kicker": "1080P CAMERA",
+    "outline": "1080P",
+    "color": "#e5d6c5",
+    "enabled": true
+  },
+  {
+    "productId": 571,
+    "image": "/images/speaker-hero-v2.png",
+    "kicker": "BLUETOOTH SPEAKER",
+    "outline": "T9",
+    "color": "#dcd5e7",
+    "enabled": true
+  }
+]

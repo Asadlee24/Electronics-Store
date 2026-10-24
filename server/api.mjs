@@ -1,4 +1,5 @@
 import {ApiError,identity,requireAdmin,requireSameOrigin,catalogue,validateProduct,validateOrder,imageType,orderMessage,STOCK_STATUSES} from './catalogue.mjs';
+import {heroSettings,saveHero} from './hero.mjs';
 import {saveContact} from './contact.mjs';
 import {gatewayGuest} from './gateway-auth.mjs';
 import {requireAdminSession,reauthenticate,requestOwnerEmailChange,limit} from './admin-auth.mjs';
@@ -15,10 +16,13 @@ export async function api(request,env){
    const object=await env.BUCKET?.get(path.slice(7));if(!object)throw new ApiError(404,'Image not found.');
    const headers=new Headers({'Content-Type':object.httpMetadata?.contentType||'application/octet-stream','Cache-Control':'public, max-age=31536000, immutable','X-Content-Type-Options':'nosniff'});return new Response(object.body,{headers});
   }
+  if(path==='/api/hero'&&request.method==='GET')return json(await heroSettings(env.DB));
   if(path==='/api/catalog'&&request.method==='GET')return json(await catalogue(env.DB));
   if(path.startsWith('/api/admin/')){
    const user=await requireAdminSession(request,env);
    if(request.method!=='GET')requireSameOrigin(request);
+   if(path==='/api/admin/hero'&&request.method==='GET')return json(await heroSettings(env.DB));
+   if(path==='/api/admin/hero'&&request.method==='POST')return json(await saveHero(env.DB,await readJSON(request),await catalogue(env.DB,{all:true})));
    if(path==='/api/admin/me'&&request.method==='GET')return json({email:user.email,canEdit:true});
    if(path==='/api/admin/products'&&request.method==='GET')return json({products:await catalogue(env.DB,{all:true})});
    if(path==='/api/admin/products'&&request.method==='POST'){

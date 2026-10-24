@@ -13,7 +13,7 @@ for(const name of ['images','logo.png','app.js','styles.css','store.mjs','ui.mjs
 }
 for(const name of ['server','deployment'])await fs.cp(path.join(root,name),path.join(fn,name),{recursive:true});
 await fs.mkdir(path.join(fn,'src'),{recursive:true});
-for(const name of ['render.mjs','catalog.json','pages.json'])await fs.copyFile(path.join(root,'src',name),path.join(fn,'src',name));
+for(const name of ['render.mjs','catalog.json','pages.json','hero-defaults.json'])await fs.copyFile(path.join(root,'src',name),path.join(fn,'src',name));
 await fs.writeFile(path.join(fn,'package.json'),JSON.stringify({type:'module'}));
 await fs.writeFile(path.join(fn,'.vc-config.json'),JSON.stringify({runtime:'nodejs22.x',handler:'deployment/vercel.mjs',launcherType:'Nodejs',maxDuration:30}));
 await fs.writeFile(path.join(out,'config.json'),JSON.stringify({version:3,routes:[{handle:'filesystem'},{src:'/(.*)',dest:'/store'}]}));
