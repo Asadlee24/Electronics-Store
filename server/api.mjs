@@ -69,31 +69,36 @@ export async function api(request,env){
    }
    if(path.startsWith('/api/admin/payment-proof/')&&request.method==='GET'){
     const id=path.slice('/api/admin/payment-proof/'.length);if(!/^[a-f0-9-]{36}$/.test(id))throw new ApiError(404,'Proof not found.');
-    const row=await env.DB.prepare('SELECT reference,payload FROM order_requests WHERE id=?').bind(id).first();const proof=row&&JSON.parse(row.payload).payment?.proof;
+    const row=await env.DB.prepare('SELECT reference,payload FROM order_requests WHERE id=? AND deleted_at IS NULL').bind(id).first();const proof=row&&JSON.parse(row.payload).payment?.proof;
     if(!proof)throw new ApiError(404,'Proof not found.');const object=await env.BUCKET?.get(proof.key);if(!object)throw new ApiError(404,'Proof not found.');
     return new Response(object.body,{headers:{'Content-Type':proof.mime,'Content-Disposition':`inline; filename="${row.reference}-proof.${proof.extension}"`,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; frame-ancestors 'self'; sandbox",'Referrer-Policy':'no-referrer'}});
    }
    if(path==='/api/admin/payments'&&request.method==='PATCH'){
     const input=await readJSON(request);if(!['verified','rejected'].includes(input.status)||typeof input.id!=='string'||!Number.isInteger(input.revision))throw new ApiError(400,'Choose a payment review result.');
-    const row=await env.DB.prepare('SELECT reference,payload,revision FROM order_requests WHERE id=?').bind(input.id).first();if(!row)throw new ApiError(404,'Order not found.');if(row.revision!==input.revision)throw new ApiError(409,'The order changed. Reload before reviewing.');
+    const row=await env.DB.prepare('SELECT reference,payload,revision FROM order_requests WHERE id=? AND deleted_at IS NULL').bind(input.id).first();if(!row)throw new ApiError(404,'Order not found.');if(row.revision!==input.revision)throw new ApiError(409,'The order changed. Reload before reviewing.');
     const order=JSON.parse(row.payload);if(!['bank','easypaisa'].includes(order.payment?.method)||!order.payment.proof)throw new ApiError(400,'This order has no transfer proof.');
     if(order.payment.status===input.status)return json({saved:true});
     const note=typeof input.note==='string'?input.note.trim():'';if(note.length>500)throw new ApiError(400,'Use a review note under 500 characters.');
     order.payment={...order.payment,status:input.status,reviewNote:note,reviewedAt:new Date().toISOString()};order.paymentStatus=input.status;
-    const result=await env.DB.prepare('UPDATE order_requests SET payload=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?').bind(JSON.stringify(order),new Date().toISOString(),input.id,input.revision).run();if(!result.meta.changes)throw new ApiError(409,'The order changed. Reload before reviewing.');
+    const result=await env.DB.prepare('UPDATE order_requests SET payload=?,revision=revision+1,updated_at=? WHERE id=? AND revision=? AND deleted_at IS NULL').bind(JSON.stringify(order),new Date().toISOString(),input.id,input.revision).run();if(!result.meta.changes)throw new ApiError(409,'The order changed. Reload before reviewing.');
     try{const settings=await getPaymentMailSettings(env);for(const [kind,to] of [['owner',settings.notificationEmail],['customer',order.customer.email]]){if(!to)continue;const message=paymentReviewEmail({...order,reference:row.reference},{owner:kind==='owner'});await env.DB.prepare("INSERT OR IGNORE INTO email_outbox (id,recipient,payload,status,created_at,attempts) VALUES (?,?,?,'pending',?,0)").bind(`${input.id}:payment:${input.revision+1}:${kind}`,to,JSON.stringify(message),Date.now()).run()}await flushEmails(env)}catch{console.error('Payment review email queue unavailable')}
     return json({saved:true});
    }
+   if(path==='/api/admin/orders/delete'&&request.method==='POST'){
+    const input=await readJSON(request);if(typeof input.id!=='string'||! /^[a-f0-9-]{36}$/.test(input.id)||!Number.isInteger(input.revision)||input.confirm!==true)throw new ApiError(400,'Confirm the order request you want to delete.');
+    const row=await env.DB.prepare('SELECT revision FROM order_requests WHERE id=? AND deleted_at IS NULL').bind(input.id).first();if(!row)throw new ApiError(404,'Order request not found.');if(row.revision!==input.revision)throw new ApiError(409,'The request changed. Refresh before deleting.');
+    const result=await env.DB.prepare('UPDATE order_requests SET deleted_at=?,revision=revision+1 WHERE id=? AND revision=? AND deleted_at IS NULL').bind(Date.now(),input.id,input.revision).run();if(!result.meta.changes)throw new ApiError(409,'The request changed. Refresh before deleting.');return json({deleted:true});
+   }
    if(path==='/api/admin/orders'&&request.method==='GET'){
-    const rows=await env.DB.prepare('SELECT id,reference,payload,status,revision,created_at,updated_at FROM order_requests ORDER BY created_at DESC LIMIT 100').all();
-    const counts=await env.DB.prepare('SELECT status, count(*) as count FROM order_requests GROUP BY status').all();
+    const rows=await env.DB.prepare('SELECT id,reference,payload,status,revision,created_at,updated_at FROM order_requests WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 100').all();
+    const counts=await env.DB.prepare('SELECT status, count(*) as count FROM order_requests WHERE deleted_at IS NULL GROUP BY status').all();
     return json({orders:(rows.results||[]).map(r=>({...JSON.parse(r.payload),id:r.id,reference:r.reference,status:r.status,revision:r.revision,createdAt:r.created_at,updatedAt:r.updated_at})),counts:counts.results||[]});
    }
    if(path==='/api/admin/orders'&&request.method==='PATCH'){
     const input=await readJSON(request);if(!STOCK_STATUSES.includes(input.status)||typeof input.id!=='string'||!Number.isInteger(input.revision))throw new ApiError(400,'Choose a valid order status.');
-    const before=await env.DB.prepare('SELECT reference,payload,status,revision FROM order_requests WHERE id=?').bind(input.id).first();
+    const before=await env.DB.prepare('SELECT reference,payload,status,revision FROM order_requests WHERE id=? AND deleted_at IS NULL').bind(input.id).first();
     if(before?.revision===input.revision&&before.status===input.status)return json({saved:true});
-    const result=await env.DB.prepare('UPDATE order_requests SET status=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?').bind(input.status,new Date().toISOString(),input.id,input.revision).run();if(!result.meta.changes)throw new ApiError(409,'The order changed elsewhere. Reload and try again.');
+    const result=await env.DB.prepare('UPDATE order_requests SET status=?,revision=revision+1,updated_at=? WHERE id=? AND revision=? AND deleted_at IS NULL').bind(input.status,new Date().toISOString(),input.id,input.revision).run();if(!result.meta.changes)throw new ApiError(409,'The order changed elsewhere. Reload and try again.');
     try{await queueStatusEmails(env,{...JSON.parse(before.payload),reference:before.reference,status:input.status},input.id+':status:'+(input.revision+1));await flushEmails(env)}catch{console.error('Order status email queue unavailable')}
     return json({saved:true});
    }

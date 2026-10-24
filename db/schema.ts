@@ -8,6 +8,7 @@ export const catalogueProducts = sqliteTable('catalogue_products', {
   updatedBy: text('updated_by').notNull()
 });
 export const orderRequests = sqliteTable('order_requests', {
+  deletedAt: integer('deleted_at'),
   id: text('id').primaryKey(),
   ownerId: text('owner_id').notNull(),
   reference: text('reference').notNull().unique(),
@@ -22,6 +23,7 @@ export const adminCredentials = sqliteTable('admin_credentials', {
   passwordHash: text('password_hash'),
   recoveryId: text('recovery_id'),
   ownerEmail: text('owner_email'),
+  ownerTransferId: text('owner_transfer_id'),
   pendingEmail: text('pending_email'),
   pendingEmailHash: text('pending_email_hash'),
   pendingEmailExpires: integer('pending_email_expires'),

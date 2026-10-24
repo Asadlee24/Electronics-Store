@@ -6,6 +6,7 @@ import {storefront,BACKEND_ORIGIN,adminSessionCookies} from '../deployment/verce
 import {route} from '../server/router.mjs';
 import {hashPassword,digest,adminGatewayHeaders} from '../server/admin-auth.mjs';
 import {orderEmail,passwordEmail,queueOrderEmails,flushEmails} from '../server/emails.mjs';
+import {mailSettings} from '../server/mail-settings.mjs';
 const origin='https://www.mdkelectronics.com';
 const owner='owner@example.test',password='a local test password 123';
 const passwordHash=await hashPassword(password);
@@ -13,6 +14,7 @@ function fixture(){
  const sqlite=new DatabaseSync(':memory:');
  for(const name of fs.readdirSync(new URL('../drizzle/',import.meta.url)).filter(x=>x.endsWith('.sql')).sort())sqlite.exec(fs.readFileSync(new URL('../drizzle/'+name,import.meta.url),'utf8'));
  const DB={prepare(sql){const stmt=sqlite.prepare(sql);let args=[];return{bind(...values){args=values;return this},async all(){return{results:stmt.all(...args)}},async first(){return stmt.get(...args)||null},async run(){return{meta:{changes:Number(stmt.run(...args).changes)}}}}}};
+ const runBatch=async statements=>{sqlite.exec('BEGIN');try{const results=[];for(const statement of statements)results.push(await statement.run());sqlite.exec('COMMIT');return results}catch(error){sqlite.exec('ROLLBACK');throw error}};DB.batch=runBatch;
  const messages=[],backend={DB,ADMIN_EMAIL:owner,ADMIN_GATEWAY_SECRET:'test-admin-key-'.repeat(4),STOREFRONT_GATEWAY_SECRET:'test-guest-key-'.repeat(4),RESEND_API_KEY:'test-mail-key',MAIL_FETCH:async(url,options)=>{assert.equal(url,'https://api.resend.com/emails');messages.push({body:JSON.parse(options.body),key:options.headers['Idempotency-Key']});return Response.json({id:crypto.randomUUID()});}};
  const env={MDK_SITES_SERVICE_TOKEN:'test-service-token',ADMIN_GATEWAY_SECRET:backend.ADMIN_GATEWAY_SECRET,STOREFRONT_GATEWAY_SECRET:backend.STOREFRONT_GATEWAY_SECRET};
  const fetcher=async(url,options)=>{assert.ok(url.startsWith(BACKEND_ORIGIN+'/'));assert.equal(options.headers['OAI-Sites-Authorization'],'Bearer test-service-token');assert.equal(options.headers['oai-authenticated-user-email'],undefined);return route(new Request(url,options),backend);};
@@ -262,4 +264,30 @@ test('Easypaisa proof uses the configured wallet and follows private owner revie
  assert.match(f.messages[0].body.text,/Easypaisa/);assert.equal(f.messages[0].body.attachments.length,1);
  assert.equal((await f.call('/api/admin/payments',{cookie,method:'PATCH',body:{id:input.requestId,revision:1,status:'verified'}})).status,200);
  assert.match(f.messages.at(-1).body.text,/Easypaisa/);f.sqlite.close();
+});
+
+test('order deletion is owner-only, revision guarded and preserves receipt/idempotency without sending mail',async()=>{
+ const f=fixture();f.seed();paymentBucket(f);const input=bankOrder();await f.call('/api/orders',{method:'POST',body:input});const cookie=await login(f),path='/api/admin/orders/delete',before=f.messages.length;
+ assert.equal((await f.call(path,{method:'POST',body:{id:input.requestId,revision:1,confirm:true}})).status,401);
+ assert.equal((await f.call(path,{method:'POST',cookie,body:{id:input.requestId,revision:1}})).status,400);
+ assert.equal((await f.call(path,{method:'POST',cookie,body:{id:input.requestId,revision:0,confirm:true}})).status,409);
+ assert.equal((await f.call(path,{method:'POST',cookie,body:{id:input.requestId,revision:1,confirm:true}})).status,200);
+ const list=await(await f.call('/api/admin/orders',{cookie})).json();assert.equal(list.orders.length,0);assert.equal(list.counts.length,0);assert.equal(f.messages.length,before);
+ assert.equal((await f.call('/api/admin/payment-proof/'+input.requestId,{cookie})).status,404);
+ assert.equal((await f.call('/api/admin/payments',{method:'PATCH',cookie,body:{id:input.requestId,revision:2,status:'verified'}})).status,404);
+ await f.call('/api/orders',{method:'POST',body:input});assert.equal(f.messages.length,before);assert.equal((await(await f.call('/api/admin/orders',{cookie})).json()).orders.length,0);
+ f.sqlite.close();
+});
+test('one-time hosting owner email transfer changes login, recovery and mail routing while keeping the password',async()=>{
+ const f=fixture();f.seed();const oldCookie=await login(f),target='new-owner@example.test';
+ f.sqlite.prepare('INSERT INTO mail_settings (id,payload,updated_at) VALUES (1,?,0)').run(JSON.stringify({fromName:'MDK Electronics',fromEmail:'admin@mdkelectronics.com',notificationEmail:'old@example.test',replyTo:'old@example.test'}));
+ f.backend.ADMIN_EMAIL=target;f.backend.ADMIN_OWNER_TRANSFER_EMAIL=target;f.backend.ADMIN_OWNER_TRANSFER_ID='a'.repeat(64);
+ assert.equal((await f.call('/api/admin/me',{cookie:oldCookie})).status,401);
+ assert.equal((await f.call('/admin/login',{form:{email:owner,password}})).status,401);
+ const response=await f.call('/admin/login',{form:{email:target,password}});assert.equal(response.status,303);const cookie=response.headers.get('set-cookie').split(';')[0];
+ assert.equal((await(await f.call('/api/admin/me',{cookie})).json()).email,target);
+ const mail=await(await f.call('/api/admin/mail',{cookie})).json();assert.equal(mail.ownerEmail,target);assert.equal(mail.notificationEmail,target);assert.equal(mail.replyTo,target);assert.equal(mail.fromEmail,'admin@mdkelectronics.com');
+ const revision=f.sqlite.prepare('SELECT revision FROM admin_credentials').get().revision;await mailSettings(f.backend);assert.equal(f.sqlite.prepare('SELECT revision FROM admin_credentials').get().revision,revision);
+ const reset=await f.call('/admin/request-reset',{form:{email:target}});assert.equal(reset.status,200);assert.equal(f.messages.at(-1).body.to[0],target);
+ f.sqlite.close();
 });
