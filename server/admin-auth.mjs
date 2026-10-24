@@ -7,7 +7,7 @@ const unhex = value => Uint8Array.from(value.match(/../g)||[], x=>parseInt(x,16)
 export const digest = async value => hex(await crypto.subtle.digest('SHA-256',typeof value==='string'?enc.encode(value):value));
 const random = () => hex(crypto.getRandomValues(new Uint8Array(32)));
 const cookieName='__Host-store_admin';
-export const clearCookie=`${cookieName}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`;
+export const clearCookie=`${cookieName}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
 const key = (secret,usage)=>crypto.subtle.importKey('raw',enc.encode(secret),{name:'HMAC',hash:'SHA-256'},false,[usage]);
 const allowedOrigins = env => new Set(['https://mdkelectronics.com','https://www.mdkelectronics.com','https://electronics-store-eight-sigma.vercel.app',...(env.STORE_ORIGIN?[env.STORE_ORIGIN]:[])]);
 async function envelope(request,time,origin,client){
@@ -90,7 +90,7 @@ export async function signIn(request,env,form){
  const token=random(),expires=Date.now()+8*60*60*1000;
  await env.DB.prepare('DELETE FROM admin_sessions WHERE expires_at<?').bind(Date.now()).run();
  await env.DB.prepare('INSERT INTO admin_sessions (token_hash,revision,expires_at) VALUES (?,?,?)').bind(await digest(token),row.revision,expires).run();
- return `${cookieName}=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=28800`;
+ return `${cookieName}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=28800`;
 }
 export async function signOut(request,env){
  await adminContext(request,env);requireSameOrigin(request);
