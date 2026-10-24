@@ -1,4 +1,5 @@
 import {escapeHTML as esc} from './catalogue.mjs';
+import {mailSettings,recordMail} from './mail-settings.mjs';
 const money=value=>'Rs. '+Number(value).toLocaleString('en-PK');
 function layout({title,preview,body,footer='This is a service email about your store account or order request.'}){
  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title></head><body style="margin:0;background:#f3f2ee;color:#202721;font-family:Arial,Helvetica,sans-serif"><div style="display:none;max-height:0;overflow:hidden">${esc(preview)}</div><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center" style="padding:40px 16px"><table role="presentation" width="560" cellspacing="0" cellpadding="0" style="width:100%;max-width:560px"><tr><td style="padding:0 0 24px;color:#6c786b;font-size:11px;letter-spacing:2px">STORE / NOTIFICATIONS</td></tr><tr><td style="background:#ffffff;border:1px solid #e3e6df;border-top:4px solid #354d39;border-radius:12px;padding:36px 30px">${body}</td></tr><tr><td style="padding:24px 8px;color:#7b8378;font-size:11px;line-height:1.8">${esc(footer)}<br><a href="https://www.mdkelectronics.com" style="color:#354d39">mdkelectronics.com</a></td></tr></table></td></tr></table></body></html>`;
@@ -11,23 +12,25 @@ export function passwordEmail(url){
  const subject='Set your store password';
  return {subject,text:`Set your store password\n\nOpen this private link within 15 minutes:\n${url}\n\nThe link works once. Changing your password signs out existing sessions. If you did not request this, ignore this email.`,html:layout({title:subject,preview:'Your private password link. Valid for 15 minutes.',body:`<span style="font-size:11px;color:#7e8b78;letter-spacing:2px">PRIVATE ACCESS</span>${heading('A fresh start.')} ${p('Use the button below to set or reset your store password. This private link expires in 15 minutes and works once.')}${button('Set my password',url)}${p('Changing your password signs out existing sessions. If you did not request this, you can ignore this email.')}`})};
 }
-export function orderEmail(order,{owner=false}={}){
- const subject=owner?`New request · ${order.reference}`:`Your request · ${order.reference}`;
+export function orderEmail(order,{owner=false,status=null}={}){
+ const subject=status?`Order request ${status} · ${order.reference}`:owner?`New request · ${order.reference}`:`Your request · ${order.reference}`;
  const lines=order.items.map(i=>`${i.quantity} × ${i.name} — ${money(i.total)}`);
  const rows=order.items.map(i=>`<tr><td style="padding:14px 0;border-bottom:1px solid #eceee8;font-size:13px;line-height:1.7">${esc(i.name)}<br><span style="color:#89917f">Qty ${i.quantity}</span></td><td align="right" style="padding:14px 0;border-bottom:1px solid #eceee8;font-size:13px;white-space:nowrap">${esc(money(i.total))}</td></tr>`).join('');
- const title=owner?'A new order request.':'We have your request.';
- return {subject,text:[title,order.reference,'',...lines,'',`Product subtotal: ${money(order.subtotal)}`,'Delivery and payment are not confirmed. The store will contact the customer to confirm availability and the final total.',...(owner?['',`Customer: ${order.customer.name}`,`Phone: ${order.customer.phone}`,`City: ${order.customer.city}`]:[])].join('\n'),html:layout({title:subject,preview:`${order.reference} · ${money(order.subtotal)} · Pending confirmation`,body:`<span style="font-size:11px;color:#7e8b78;letter-spacing:2px">${esc(order.reference)}</span>${heading(title)}${p(owner?'Review the items and contact the customer to confirm availability and delivery.':`Hi ${order.customer.name}, your request is saved. Our team will confirm availability, delivery charges and payment with you.`)}<table role="presentation" width="100%" cellspacing="0" cellpadding="0">${rows}<tr><td style="padding-top:20px;font-size:13px">Product subtotal</td><td align="right" style="padding-top:20px;font-size:18px;font-weight:bold">${esc(money(order.subtotal))}</td></tr></table>${owner?p(`${order.customer.name} · ${order.customer.phone} · ${order.customer.city}`):''}${p('Pending confirmation. No payment has been taken.')}${button(owner?'Open order requests':'Visit the store',owner?'https://www.mdkelectronics.com/admin/#orders':'https://www.mdkelectronics.com')}`})};
+ const title=status?'Your request is '+status+'.':owner?'A new order request.':'We have your request.';
+ return {subject,text:[title,order.reference,'',...lines,'',`Product subtotal: ${money(order.subtotal)}`,status?'Contact the store for payment or delivery details.': 'Delivery and payment are not confirmed. The store will contact the customer to confirm availability and the final total.',...(owner?['',`Customer: ${order.customer.name}`,`Phone: ${order.customer.phone}`,`City: ${order.customer.city}`]:[])].join('\n'),html:layout({title:subject,preview:`${order.reference} · ${money(order.subtotal)} · ${status||'Pending confirmation'}`,body:`<span style="font-size:11px;color:#7e8b78;letter-spacing:2px">${esc(order.reference)}</span>${heading(title)}${p(status?'The store updated this request to '+status+'. Contact the store with any questions.':owner?'Review the items and contact the customer to confirm availability and delivery.':`Hi ${order.customer.name}, your request is saved. Our team will confirm availability, delivery charges and payment with you.`)}<table role="presentation" width="100%" cellspacing="0" cellpadding="0">${rows}<tr><td style="padding-top:20px;font-size:13px">Product subtotal</td><td align="right" style="padding-top:20px;font-size:18px;font-weight:bold">${esc(money(order.subtotal))}</td></tr></table>${owner?p(`${order.customer.name} · ${order.customer.phone} · ${order.customer.city}`):''}${p(status?'Payments are handled directly with the store.':'Pending confirmation. No payment has been taken.')}${button(owner?'Open order requests':'Visit the store',owner?'https://www.mdkelectronics.com/admin/#orders':'https://www.mdkelectronics.com')}`})};
 }
-export async function sendEmail(env,to,message,id){
+export async function sendEmail(env,to,message,id,purpose='notification'){
  if(!env.RESEND_API_KEY)throw Error('Email is not configured');
- const fetcher=env.MAIL_FETCH||fetch;
- const response=await fetcher('https://api.resend.com/emails',{method:'POST',headers:{Authorization:'Bearer '+env.RESEND_API_KEY,'Content-Type':'application/json','Idempotency-Key':id},body:JSON.stringify({from:env.MAIL_FROM||'Store <admin@mdkelectronics.com>',to:[to],...message}),signal:AbortSignal.timeout(10000)});
- if(!response.ok)throw Error('Email provider did not accept the message');
- const data=await response.json();if(!data.id)throw Error('Email provider response was incomplete');return data.id;
+ const fetcher=env.MAIL_FETCH||fetch,settings=await mailSettings(env);
+ let response;try{response=await fetcher('https://api.resend.com/emails',{method:'POST',headers:{Authorization:'Bearer '+env.RESEND_API_KEY,'Content-Type':'application/json','Idempotency-Key':id},body:JSON.stringify({from:settings.sender,to:[to],reply_to:settings.replyTo,...message}),signal:AbortSignal.timeout(10000)})}catch{await recordMail(env,{purpose,recipient:to,status:'failed',error:'Email provider could not be reached'});throw Error('Email provider could not be reached');}
+ if(!response.ok){let name='request_failed';try{const body=await response.json();if(/^[a-z_]{1,60}$/.test(body.name))name=body.name}catch{}
+  const safe='Email provider error '+response.status+' ('+name+')';await recordMail(env,{purpose,recipient:to,status:'failed',error:safe});throw Error(safe);}
+ const data=await response.json();if(!data.id)throw Error('Email provider response was incomplete');await recordMail(env,{purpose,recipient:to,status:'accepted',providerId:data.id});return data.id;
 }
 export async function queueOrderEmails(env,order,id){
  if(!env.RESEND_API_KEY)return;
- for(const [kind,to] of [['owner',env.ADMIN_EMAIL],['customer',order.customer.email]]){
+ const settings=await mailSettings(env);
+ for(const [kind,to] of [['owner',settings.notificationEmail],['customer',order.customer.email]]){
   if(!to)continue;
   await env.DB.prepare("INSERT OR IGNORE INTO email_outbox (id,recipient,payload,status,created_at,attempts) VALUES (?,?,?,'pending',?,0)").bind(`${id}:${kind}`,to,JSON.stringify(orderEmail(order,{owner:kind==='owner'})),Date.now()).run();
  }
@@ -40,7 +43,22 @@ export async function flushEmails(env){
  for(const row of rows.results||[]){
   // Atomic claim prevents concurrent checkout and retry handlers sending twice.
   const claimed=await env.DB.prepare("UPDATE email_outbox SET status='sending',attempts=attempts+1,next_attempt=? WHERE id=? AND status IN ('pending','failed')").bind(now+60000,row.id).run();if(!claimed.meta.changes)continue;
-  try{const providerId=await sendEmail(env,row.recipient,JSON.parse(row.payload),'store-order-'+row.id);await env.DB.prepare("UPDATE email_outbox SET status='accepted',provider_id=?,last_error=NULL WHERE id=?").bind(providerId,row.id).run();}
-  catch{await env.DB.prepare("UPDATE email_outbox SET status='failed',last_error='Provider did not accept the email',next_attempt=? WHERE id=?").bind(now+60000,row.id).run();}
+  try{const providerId=await sendEmail(env,row.recipient,JSON.parse(row.payload),'store-order-'+row.id,'order');await env.DB.prepare("UPDATE email_outbox SET status='accepted',provider_id=?,last_error=NULL WHERE id=?").bind(providerId,row.id).run();}
+  catch(error){await env.DB.prepare("UPDATE email_outbox SET status='failed',last_error=?,next_attempt=? WHERE id=?").bind(/^Email provider error \d{3} \([a-z_]+\)$/.test(error.message)?error.message:'Provider did not accept the email',now+60000,row.id).run();}
+ }
+}
+
+export function verificationEmail(url){
+ const link=new URL(url);if(!['mdkelectronics.com','www.mdkelectronics.com','electronics-store-eight-sigma.vercel.app'].includes(link.hostname)||link.protocol!=='https:'||link.pathname!=='/admin/verify-email')throw Error('Invalid owner verification URL');
+ return {subject:'Verify your store owner email',text:`The current store admin requested this owner email change. Open this private link within 15 minutes to confirm:\n${url}\n\nThe old password will stop working and all sessions will be signed out. After confirming, use password recovery to choose your own password. If this was not requested, ignore this email.`,html:layout({title:'Verify your store owner email',preview:'Confirm the store owner email change within 15 minutes.',body:heading('Confirm your email.')+p('The current admin requested an owner email change. Confirm only if you expect to manage this store.')+button('Confirm owner email',url)+p('This link works once within 15 minutes. Existing sessions and the old password stop working. After confirming, use password recovery to choose your own password. Ignore this email if you did not expect it.')})};
+}
+export function testEmail(){return {subject:'Store email connection test',text:'Your store can send transactional email through Resend. This is a test requested from the admin Email settings.',html:layout({title:'Store email connection test',preview:'A test from your store workspace.',body:heading('Email is connected.')+p('This test was requested from your store workspace. Your mail provider accepted the connection.')})};}
+export async function queueStatusEmails(env,order,id){
+ if(!env.RESEND_API_KEY)return;
+ const settings=await mailSettings(env);
+ for(const [kind,to] of [['owner',settings.notificationEmail],['customer',order.customer.email]]){
+  if(!to)continue;
+  const message=orderEmail(order,{owner:kind==='owner',status:order.status});
+  await env.DB.prepare("INSERT OR IGNORE INTO email_outbox (id,recipient,payload,status,created_at,attempts) VALUES (?,?,?,'pending',?,0)").bind(`${id}:${kind}`,to,JSON.stringify(message),Date.now()).run();
  }
 }

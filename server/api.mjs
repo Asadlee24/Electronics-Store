@@ -1,9 +1,10 @@
 import {ApiError,identity,requireAdmin,requireSameOrigin,catalogue,validateProduct,validateOrder,imageType,orderMessage,STOCK_STATUSES} from './catalogue.mjs';
 import {gatewayGuest} from './gateway-auth.mjs';
-import {requireAdminSession} from './admin-auth.mjs';
-import {queueOrderEmails,flushEmails,orderEmail,passwordEmail} from './emails.mjs';
+import {requireAdminSession,reauthenticate,requestOwnerEmailChange,limit} from './admin-auth.mjs';
+import {mailSettings,saveMailSettings} from './mail-settings.mjs';
+import {queueOrderEmails,queueStatusEmails,flushEmails,orderEmail,passwordEmail,sendEmail,verificationEmail,testEmail} from './emails.mjs';
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
-async function readJSON(request){if(!request.headers.get('content-type')?.includes('application/json'))throw new ApiError(415,'Send JSON data.');const body=await request.text();if(body.length>50000)throw new ApiError(413,'Request is too large.');try{const value=JSON.parse(body);if(!value||typeof value!=='object'||Array.isArray(value))throw Error();return value;}catch{throw new ApiError(400,'Invalid request data.')}}
+async function readJSON(request){if(!request.headers.get('content-type')?.includes('application/json'))throw new ApiError(415,'Send JSON data.');const body=await request.clone().text();if(body.length>50000)throw new ApiError(413,'Request is too large.');try{const value=JSON.parse(body);if(!value||typeof value!=='object'||Array.isArray(value))throw Error();return value;}catch{throw new ApiError(400,'Invalid request data.')}}
 export async function api(request,env){
  const path=new URL(request.url).pathname.replace(/\/$/,'');
  if(!path.startsWith('/api/')&&!path.startsWith('/media/'))return null;
@@ -46,12 +47,32 @@ export async function api(request,env){
    }
    if(path==='/api/admin/orders'&&request.method==='PATCH'){
     const input=await readJSON(request);if(!STOCK_STATUSES.includes(input.status)||typeof input.id!=='string'||!Number.isInteger(input.revision))throw new ApiError(400,'Choose a valid order status.');
-    const result=await env.DB.prepare('UPDATE order_requests SET status=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?').bind(input.status,new Date().toISOString(),input.id,input.revision).run();if(!result.meta.changes)throw new ApiError(409,'The order changed elsewhere. Reload and try again.');return json({saved:true});
+    const before=await env.DB.prepare('SELECT reference,payload,status,revision FROM order_requests WHERE id=?').bind(input.id).first();
+    if(before?.revision===input.revision&&before.status===input.status)return json({saved:true});
+    const result=await env.DB.prepare('UPDATE order_requests SET status=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?').bind(input.status,new Date().toISOString(),input.id,input.revision).run();if(!result.meta.changes)throw new ApiError(409,'The order changed elsewhere. Reload and try again.');
+    try{await queueStatusEmails(env,{...JSON.parse(before.payload),reference:before.reference,status:input.status},input.id+':status:'+(input.revision+1));await flushEmails(env)}catch{console.error('Order status email queue unavailable')}
+    return json({saved:true});
    }
    if(path==='/api/admin/mail'&&request.method==='GET'){
     const rows=await env.DB.prepare('SELECT status,count(*) as count FROM email_outbox GROUP BY status').all();
-    const recent=await env.DB.prepare('SELECT id,recipient,status,attempts,created_at,last_error FROM email_outbox ORDER BY created_at DESC LIMIT 20').all();
-    return json({configured:!!env.RESEND_API_KEY,sender:env.MAIL_FROM||'Store <admin@mdkelectronics.com>',counts:rows.results||[],recent:recent.results||[]});
+    const recent=await env.DB.prepare('SELECT id,purpose,recipient,status,provider_id,last_error,created_at FROM email_activity ORDER BY created_at DESC LIMIT 20').all();
+    const pending=await env.DB.prepare('SELECT pending_email,pending_email_expires FROM admin_credentials WHERE id=1').first();
+    return json({configured:!!env.RESEND_API_KEY,...await mailSettings(env),pendingEmail:pending?.pending_email_expires>Date.now()?pending.pending_email:null,counts:rows.results||[],recent:recent.results||[]});
+   }
+   if(path==='/api/admin/mail/settings'&&request.method==='POST'){
+    const input=await readJSON(request);await reauthenticate(request,env,input.currentPassword);return json({saved:true,settings:await saveMailSettings(env,input)});
+   }
+   if(path==='/api/admin/mail/test'&&request.method==='POST'){
+    await limit(env,user.client,'mail-test',3,3600000);const settings=await mailSettings(env);
+    try{const id=await sendEmail(env,settings.notificationEmail,testEmail(),'store-test-'+crypto.randomUUID(),'test');return json({accepted:true,to:settings.notificationEmail,providerId:id})}
+    catch(error){throw new ApiError(503,/^Email provider error/.test(error.message)?error.message:'The test email could not be sent. Check the sending configuration.');}
+   }
+   if(path==='/api/admin/owner-email'&&request.method==='POST'){
+    const input=await readJSON(request);try{return json(await requestOwnerEmailChange(request,env,input,({to,url,id})=>sendEmail(env,to,verificationEmail(url),'store-owner-'+id,'owner-verification')))}
+    catch(error){if(error instanceof ApiError)throw error;throw new ApiError(503,'The verification email could not be sent. No owner change was made.');}
+   }
+   if(path==='/api/admin/owner-email/cancel'&&request.method==='POST'){
+    await env.DB.prepare('UPDATE admin_credentials SET pending_email=NULL,pending_email_hash=NULL,pending_email_expires=NULL WHERE id=1').run();return json({saved:true});
    }
    if(path==='/api/admin/mail/retry'&&request.method==='POST'){await flushEmails(env);return json({saved:true});}
    if(path==='/api/admin/mail-preview'&&request.method==='GET'){

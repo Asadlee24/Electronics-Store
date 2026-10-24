@@ -20,6 +20,10 @@ export const orderRequests = sqliteTable('order_requests', {
 export const adminCredentials = sqliteTable('admin_credentials', {
   id: integer('id').primaryKey(),
   passwordHash: text('password_hash'),
+  ownerEmail: text('owner_email'),
+  pendingEmail: text('pending_email'),
+  pendingEmailHash: text('pending_email_hash'),
+  pendingEmailExpires: integer('pending_email_expires'),
   revision: integer('revision').notNull().default(0),
   resetHash: text('reset_hash'),
   resetExpires: integer('reset_expires'),
@@ -45,4 +49,18 @@ export const emailOutbox = sqliteTable('email_outbox', {
   nextAttempt: integer('next_attempt'),
   providerId: text('provider_id'),
   lastError: text('last_error')
+});
+export const mailSettings = sqliteTable('mail_settings', {
+  id: integer('id').primaryKey(),
+  payload: text('payload').notNull(),
+  updatedAt: integer('updated_at').notNull()
+});
+export const emailActivity = sqliteTable('email_activity', {
+  id: text('id').primaryKey(),
+  purpose: text('purpose').notNull(),
+  recipient: text('recipient').notNull(),
+  status: text('status').notNull(),
+  providerId: text('provider_id'),
+  lastError: text('last_error'),
+  createdAt: integer('created_at').notNull()
 });

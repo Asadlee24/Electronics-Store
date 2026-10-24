@@ -79,3 +79,46 @@ test('transactional outbox sends once and retries provider failures with the sam
  const f=fixture();await queueOrderEmails(f.backend,order,'test-1');await queueOrderEmails(f.backend,order,'test-1');await flushEmails(f.backend);assert.equal(f.messages.length,2);await flushEmails(f.backend);assert.equal(f.messages.length,2);assert.equal(f.sqlite.prepare("SELECT count(*) as count FROM email_outbox WHERE status='accepted'").get().count,2);
  await queueOrderEmails(f.backend,order,'test-2');const original=f.backend.MAIL_FETCH;f.backend.MAIL_FETCH=async()=>new Response('{}',{status:503});await flushEmails(f.backend);assert.equal(f.sqlite.prepare("SELECT count(*) as count FROM email_outbox WHERE status='failed'").get().count,2);f.sqlite.prepare('UPDATE email_outbox SET next_attempt=0').run();f.backend.MAIL_FETCH=original;await flushEmails(f.backend);assert.equal(f.messages.length,4);assert.ok(f.messages.every(x=>x.key.startsWith('store-order-test-')));f.sqlite.close();
 });
+test('only a signed-in owner with their current password can change mail settings',async()=>{
+ const f=fixture();f.seed();const cookie=await login(f),settings={fromName:'Client Store',fromEmail:'orders@mdkelectronics.com',replyTo:'support@example.test',notificationEmail:'client@example.test',currentPassword:password};
+ assert.equal((await f.call('/api/admin/mail/settings',{method:'POST',body:settings})).status,401);
+ assert.equal((await f.call('/api/admin/mail/settings',{method:'POST',cookie,body:{...settings,currentPassword:'wrong'}})).status,401);
+ assert.equal((await f.call('/api/admin/mail/settings',{method:'POST',cookie,body:{...settings,fromEmail:'other@unverified.test'}})).status,400);
+ assert.equal((await f.call('/api/admin/mail/settings',{method:'POST',cookie,body:{...settings,replyTo:'hello@example.test\r\nBcc: elsewhere@example.test'}})).status,400);
+ const saved=await f.call('/api/admin/mail/settings',{method:'POST',cookie,body:settings});assert.equal(saved.status,200,await saved.clone().text());
+ const test=await f.call('/api/admin/mail/test',{method:'POST',cookie,body:{}});assert.equal(test.status,200);assert.deepEqual(f.messages[0].body.to,['client@example.test']);assert.equal(f.messages[0].body.from,'Client Store <orders@mdkelectronics.com>');assert.equal(f.messages[0].body.reply_to,'support@example.test');
+ const report=await(await f.call('/api/admin/mail',{cookie})).json();assert.equal(report.ownerEmail,owner);assert.equal(report.notificationEmail,'client@example.test');assert.equal(report.recent[0].purpose,'test');assert.equal(report.recent[0].status,'accepted');assert.doesNotMatch(JSON.stringify(report),/test-mail-key|currentPassword|password_hash/);f.sqlite.close();
+});
+test('client owner handover requires reauthentication and inbox confirmation, then revokes old sessions and reset links',async()=>{
+ const f=fixture();f.seed();const cookie=await login(f),email='client-owner@example.test';
+ await f.call('/admin/request-reset',{form:{email:owner}});const oldReset=new URL(f.messages[0].body.text.match(/https:\/\/[^\s]+/)[0]).searchParams.get('token');
+ assert.equal((await f.call('/api/admin/owner-email',{method:'POST',body:{email,currentPassword:password}})).status,401);
+ assert.equal((await f.call('/api/admin/owner-email',{method:'POST',cookie,body:{email,currentPassword:'wrong'}})).status,401);
+ const result=await f.call('/api/admin/owner-email',{method:'POST',cookie,body:{email,currentPassword:password}});assert.equal(result.status,200,await result.clone().text());
+ assert.equal(f.sqlite.prepare('SELECT owner_email FROM admin_credentials').get().owner_email,null);
+ const message=f.messages.find(m=>m.body.subject==='Verify your store owner email');assert.deepEqual(message.body.to,[email]);const token=new URL(message.body.text.match(/https:\/\/[^\s]+/)[0]).searchParams.get('token');
+ const raw=f.sqlite.prepare('SELECT pending_email_hash FROM admin_credentials').get().pending_email_hash;assert.equal(raw,await digest(token));assert.notEqual(raw,token);
+ assert.equal((await f.call('/admin/verify-email',{form:{token:'a'.repeat(64)}})).status,400);
+ const confirm=await f.call('/admin/verify-email',{form:{token}});assert.equal(confirm.status,303,await confirm.clone().text());assert.equal(f.sqlite.prepare('SELECT owner_email FROM admin_credentials').get().owner_email,email);
+ assert.equal((await f.call('/api/admin/me',{cookie})).status,401);assert.equal((await f.call('/admin/verify-email',{form:{token}})).status,400);
+ assert.equal((await f.call('/admin/reset',{form:{token:oldReset,password,confirm:password}})).status,400);
+ assert.equal((await f.call('/admin/login',{form:{email:owner,password}})).status,401);
+ assert.equal((await f.call('/admin/login',{form:{email,password}})).status,401);
+ const before=f.messages.length;await f.call('/admin/request-reset',{form:{email:owner}});assert.equal(f.messages.length,before);await f.call('/admin/request-reset',{form:{email}});assert.equal(f.messages.length,before+1);assert.deepEqual(f.messages.at(-1).body.to,[email]);const fresh=new URL(f.messages.at(-1).body.text.match(/https:\/\/[^\s]+/)[0]).searchParams.get('token');
+ const next='the client private password';assert.equal((await f.call('/admin/reset',{form:{token:fresh,password:next,confirm:next}})).status,303);assert.equal((await f.call('/admin/login',{form:{email,password:next}})).status,303);f.sqlite.close();
+});
+test('cancelling handover invalidates its link and provider errors remain visible without secrets',async()=>{
+ const f=fixture();f.seed();const cookie=await login(f);
+ await f.call('/api/admin/owner-email',{method:'POST',cookie,body:{email:'client@example.test',currentPassword:password}});const token=new URL(f.messages[0].body.text.match(/https:\/\/[^\s]+/)[0]).searchParams.get('token');
+ assert.equal((await f.call('/api/admin/owner-email/cancel',{method:'POST',cookie,body:{}})).status,200);assert.equal((await f.call('/admin/verify-email',{form:{token}})).status,400);
+ f.backend.MAIL_FETCH=async()=>Response.json({name:'validation_error',message:'private provider response must not be shown'},{status:403});
+ const response=await f.call('/api/admin/mail/test',{method:'POST',cookie,body:{}});assert.equal(response.status,503);const report=await(await f.call('/api/admin/mail',{cookie})).json();assert.ok(report.recent.some(m=>m.status==='failed'&&m.last_error==='Email provider error 403 (validation_error)'));assert.doesNotMatch(JSON.stringify(report),/test-mail-key|private provider/);f.sqlite.close();
+});
+test('new requests and status updates email the configured store inbox and customer once',async()=>{
+ const f=fixture();f.seed();const cookie=await login(f);
+ await f.call('/api/admin/mail/settings',{method:'POST',cookie,body:{fromName:'Store',fromEmail:'orders@mdkelectronics.com',notificationEmail:'client@example.test',replyTo:'support@example.test',currentPassword:password}});
+ const id=crypto.randomUUID(),input={requestId:id,items:[{id:737,quantity:1}],details:{name:'Test customer',phone:'03140000000',email:'buyer@example.test',address:'Test street',city:'Peshawar'},consent:true};
+ const saved=await f.call('/api/orders',{method:'POST',body:input});assert.equal(saved.status,201,await saved.clone().text());assert.equal(f.messages.length,2);assert.deepEqual(f.messages.map(m=>m.body.to[0]).sort(),['buyer@example.test','client@example.test']);
+ const status={id,revision:1,status:'dispatched'};assert.equal((await f.call('/api/admin/orders',{method:'PATCH',cookie,body:status})).status,200);assert.equal(f.messages.length,4);assert.match(f.messages[2].body.subject,/dispatched/);assert.doesNotMatch(f.messages[2].body.html,/Pending confirmation/);
+ assert.equal((await f.call('/api/admin/orders',{method:'PATCH',cookie,body:{...status,revision:2}})).status,200);assert.equal(f.messages.length,4);f.sqlite.close();
+});

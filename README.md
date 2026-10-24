@@ -64,7 +64,11 @@ Admin edits appear on subsequent store reads. Product photos remain in R2.
 
 Set backend runtime secrets `RESEND_API_KEY`, `MAIL_FROM`, `STORE_ORIGIN`, `ADMIN_EMAIL` and `ADMIN_GATEWAY_SECRET`. The Resend key should be sending-only and restricted to the verified store domain. Password links are sent only to `ADMIN_EMAIL`, expire after 15 minutes and work once. Login and reset requests are rate-limited in D1.
 
-Order emails include a plain-text alternative, item totals and unpaid-request status. They use a persistent idempotent outbox. Submissions attempt delivery immediately; the admin Email section can retry failed queued messages. Provider acceptance does not prove inbox delivery. No marketing emails or delivery webhooks are configured.
+The admin Email section has sender name/address, reply-to and order-notification settings. Saving settings requires a signed-in session and current password. Sending addresses must remain on the verified `mdkelectronics.com` domain; notification and reply-to inboxes can belong to the client. A test email and queue retry button are available. Recent activity includes password recovery, verification, tests and order notifications, with provider acceptance IDs and sanitized failures.
+
+To hand over the admin email, the current owner must enter their password and request the change. The new inbox must confirm a single-use 15-minute link before the email changes. Confirmation invalidates all sessions and older reset links. The previous password is disabled; the new owner uses recovery to choose their own password. A pending change can be cancelled. No email change is made automatically.
+
+New requests and status updates produce transactional messages for the configured store inbox and customer, with HTML and plain text. The persistent outbox uses idempotency keys. Sending happens during submission/status updates and manual retry; there is no scheduled retry worker. Provider acceptance is shown separately from inbox delivery; delivery webhooks are not configured. Email bodies and private recovery tokens are never stored in the activity log.
 
 Validate locally with `node scripts/build-vercel.mjs` and `npm test`. Verify the hosted homepage, changed product, uploaded photo, private admin boundary and an authorized test checkout before switching domain DNS.
 

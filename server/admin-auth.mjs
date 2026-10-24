@@ -1,4 +1,5 @@
 import {ApiError,identity,requireSameOrigin} from './catalogue.mjs';
+import {ownerEmail,emailAddress} from './mail-settings.mjs';
 const enc = new TextEncoder();
 export const hex = value => Array.from(new Uint8Array(value), b => b.toString(16).padStart(2,'0')).join('');
 const unhex = value => Uint8Array.from(value.match(/../g)||[], x=>parseInt(x,16));
@@ -20,15 +21,16 @@ export async function adminGatewayHeaders(request,secret,client){
 }
 export async function adminContext(request,env){
  if(!env.ADMIN_EMAIL)throw new ApiError(403,'Admin is not configured.');
+ const owner=await ownerEmail(env);
  if(request.headers.has('x-store-admin-signature')){
   const time=request.headers.get('x-store-admin-time'),signature=request.headers.get('x-store-admin-signature'),origin=request.headers.get('x-store-public-origin'),client=request.headers.get('x-store-client');
   if(!env.ADMIN_GATEWAY_SECRET||env.ADMIN_GATEWAY_SECRET.length<32||!/^\d{13}$/.test(time||'')||Math.abs(Date.now()-Number(time))>120000||!/^[a-f0-9]{64}$/.test(signature||'')||!/^[a-f0-9]{64}$/.test(client||'')||!allowedOrigins(env).has(origin))throw new ApiError(401,'Admin connection could not be verified.');
   if(!await crypto.subtle.verify('HMAC',await key(env.ADMIN_GATEWAY_SECRET,'verify'),unhex(signature),await envelope(request,time,origin,client)))throw new ApiError(401,'Admin connection could not be verified.');
-  return {origin,client,email:env.ADMIN_EMAIL,id:'store-owner'};
+  return {origin,client,email:owner,id:'store-owner'};
  }
  const user=identity(request);
  if(!user)throw new ApiError(401,'Sign in to your owner account to continue.');
- if(!env.ADMIN_EMAIL||user.email!==env.ADMIN_EMAIL.toLowerCase().trim())throw new ApiError(403,'This account cannot manage the store.');
+ if(!env.ADMIN_EMAIL||user.email!==owner)throw new ApiError(403,'This account cannot manage the store.');
  return {...user,origin:env.STORE_ORIGIN||'https://www.mdkelectronics.com',client:await digest(user.id)};
 }
 export async function credentials(env){
@@ -72,7 +74,7 @@ export async function signIn(request,env,form){
  // Always perform the password derivation for a configured account, including
  // mismatched email addresses. No password or token is logged.
  const valid=await verifyPassword(form.get('password'),row.password_hash);
- if(!valid||email!==env.ADMIN_EMAIL.toLowerCase().trim())throw new ApiError(401,'Email or password is incorrect.');
+ if(!valid||email!==context.email)throw new ApiError(401,'Email or password is incorrect.');
  const token=random(),expires=Date.now()+8*60*60*1000;
  await env.DB.prepare('DELETE FROM admin_sessions WHERE expires_at<?').bind(Date.now()).run();
  await env.DB.prepare('INSERT INTO admin_sessions (token_hash,revision,expires_at) VALUES (?,?,?)').bind(await digest(token),row.revision,expires).run();
@@ -86,14 +88,14 @@ export async function signOut(request,env){
 export async function requestReset(request,env,form,send){
  const context=await adminContext(request,env);requireSameOrigin(request);await limit(env,context.client,'reset',4,3600000);
  const row=await credentials(env),email=String(form.get('email')||'').trim().toLowerCase();
- if(email!==env.ADMIN_EMAIL.toLowerCase().trim())return;
+ if(email!==context.email)return;
  await limit(env,'owner-reset','reset-owner',3,3600000);
  if(!env.RESEND_API_KEY)throw new ApiError(503,'Password recovery email is not configured yet.');
  const token=random(),now=Date.now();
  const result=await env.DB.prepare('UPDATE admin_credentials SET reset_hash=?,reset_expires=?,reset_sent_at=? WHERE id=1 AND (reset_sent_at IS NULL OR reset_sent_at<?)').bind(await digest(token),now+15*60000,now,now-60000).run();
  if(!result.meta.changes)return;
  // Raw tokens exist only in the message sent to the fixed owner inbox.
- try{await send({to:env.ADMIN_EMAIL,url:context.origin+'/admin/reset?token='+token,id:await digest(token)});}
+ try{await send({to:context.email,url:context.origin+'/admin/reset?token='+token,id:await digest(token)});}
  catch{await env.DB.prepare('UPDATE admin_credentials SET reset_hash=NULL,reset_expires=NULL WHERE id=1 AND reset_hash=?').bind(await digest(token)).run();throw new ApiError(503,'The email could not be sent. Please try again shortly.');}
 }
 export async function resetPassword(request,env,form){
@@ -103,7 +105,32 @@ export async function resetPassword(request,env,form){
  const row=await credentials(env),hash=await digest(token);
  if(row.reset_hash!==hash||row.reset_expires<Date.now())throw new ApiError(400,'This link is invalid or has expired. Request a new one.');
  const stored=await hashPassword(form.get('password'));
- const result=await env.DB.prepare('UPDATE admin_credentials SET password_hash=?,revision=revision+1,reset_hash=NULL,reset_expires=NULL WHERE id=1 AND reset_hash=? AND reset_expires>?').bind(stored,hash,Date.now()).run();
+ const result=await env.DB.prepare('UPDATE admin_credentials SET password_hash=?,revision=revision+1,reset_hash=NULL,reset_expires=NULL,pending_email=NULL,pending_email_hash=NULL,pending_email_expires=NULL WHERE id=1 AND reset_hash=? AND reset_expires>?').bind(stored,hash,Date.now()).run();
  if(!result.meta.changes)throw new ApiError(400,'This link has already been used. Request a new one.');
+ return clearCookie;
+}
+
+export async function reauthenticate(request,env,password){
+ const context=await requireAdminSession(request,env);requireSameOrigin(request);await limit(env,context.client,'reauth',5);
+ const row=await credentials(env);if(!await verifyPassword(password,row.password_hash))throw new ApiError(401,'Your current password is incorrect.');
+ return {...context,credentialRevision:row.revision};
+}
+export async function requestOwnerEmailChange(request,env,input,send){
+ const context=await reauthenticate(request,env,input.currentPassword),email=String(input.email||'').trim().toLowerCase();
+ if(!emailAddress(email))throw new ApiError(400,'Enter a valid new owner email.');
+ if(email===context.email)throw new ApiError(400,'That is already your owner email.');
+ await limit(env,'owner-change','owner-change',3,3600000);
+ const token=random(),hash=await digest(token),expires=Date.now()+15*60000;
+ const changed=await env.DB.prepare('UPDATE admin_credentials SET pending_email=?,pending_email_hash=?,pending_email_expires=? WHERE id=1 AND revision=?').bind(email,hash,expires,context.credentialRevision).run();
+ if(!changed.meta.changes)throw new ApiError(409,'Your credentials changed. Sign in again.');
+ try{await send({to:email,url:context.origin+'/admin/verify-email?token='+token,id:hash})}
+ catch(error){await env.DB.prepare('UPDATE admin_credentials SET pending_email=NULL,pending_email_hash=NULL,pending_email_expires=NULL WHERE id=1 AND pending_email_hash=?').bind(hash).run();throw error}
+ return {pendingEmail:email};
+}
+export async function confirmOwnerEmail(request,env,token){
+ const context=await adminContext(request,env);requireSameOrigin(request);await limit(env,context.client,'confirm-owner',8);
+ if(!/^[a-f0-9]{64}$/.test(token||''))throw new ApiError(400,'This email verification link is invalid or has expired.');
+ const result=await env.DB.prepare('UPDATE admin_credentials SET owner_email=pending_email,password_hash=NULL,pending_email=NULL,pending_email_hash=NULL,pending_email_expires=NULL,revision=revision+1,reset_hash=NULL,reset_expires=NULL,reset_sent_at=NULL WHERE id=1 AND pending_email_hash=? AND pending_email_expires>? AND pending_email IS NOT NULL').bind(await digest(token),Date.now()).run();
+ if(!result.meta.changes)throw new ApiError(400,'This email verification link is invalid or has already been used.');
  return clearCookie;
 }
