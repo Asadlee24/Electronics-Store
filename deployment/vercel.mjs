@@ -30,7 +30,7 @@ export async function storefront(request,env=process.env,fetcher=fetch){
    // Keep the browser Origin on same-site form posts; suppress referrers
    // on external navigation so recovery tokens cannot leak to other sites.
    const headers=new Headers({'Content-Type':response.headers.get('content-type')||'text/plain','Cache-Control':'no-store','Referrer-Policy':'same-origin','X-Content-Type-Options':'nosniff'});
-   for(const name of ['set-cookie','content-security-policy','x-frame-options']){const value=response.headers.get(name);if(value)headers.set(name,value);}
+   for(const name of ['set-cookie','content-security-policy','x-frame-options']){let value=response.headers.get(name);if(value){if(name==='set-cookie')value=value.replace(/SameSite=Strict/i,'SameSite=Lax');headers.set(name,value);}}
    const location=response.headers.get('location');
    if(location){if(!location.startsWith('/admin')||location.startsWith('//'))throw Error('Unexpected admin redirect');headers.set('Location',location);}
    return new Response(response.body,{status:response.status,headers});
