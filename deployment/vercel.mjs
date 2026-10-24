@@ -27,7 +27,9 @@ export async function storefront(request,env=process.env,fetcher=fetch){
    const client=createHmac('sha256',env.ADMIN_GATEWAY_SECRET).update(request.headers.get('x-vercel-forwarded-for')?.split(',')[0].trim()||'shared-visitor').digest('hex');
    const signed=await adminGatewayHeaders(signingRequest,env.ADMIN_GATEWAY_SECRET,client);
    const response=await fetcher(BACKEND_ORIGIN+url.pathname+url.search,{method:request.method,headers:{'OAI-Sites-Authorization':'Bearer '+token,cookie,...signed,...(contentType?{'Content-Type':contentType}:{}),Origin:BACKEND_ORIGIN,'Sec-Fetch-Site':'same-origin'},...(raw?{body:raw}:{}),redirect:'manual',signal:AbortSignal.timeout(20000)});
-   const headers=new Headers({'Content-Type':response.headers.get('content-type')||'text/plain','Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff'});
+   // Keep the browser Origin on same-site form posts; suppress referrers
+   // on external navigation so recovery tokens cannot leak to other sites.
+   const headers=new Headers({'Content-Type':response.headers.get('content-type')||'text/plain','Cache-Control':'no-store','Referrer-Policy':'same-origin','X-Content-Type-Options':'nosniff'});
    for(const name of ['set-cookie','content-security-policy','x-frame-options']){const value=response.headers.get(name);if(value)headers.set(name,value);}
    const location=response.headers.get('location');
    if(location){if(!location.startsWith('/admin')||location.startsWith('//'))throw Error('Unexpected admin redirect');headers.set('Location',location);}

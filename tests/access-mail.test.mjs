@@ -22,8 +22,22 @@ function fixture(){
 }
 async function login(f){const response=await f.call('/admin/login',{form:{email:owner,password}});assert.equal(response.status,303,await response.clone().text());return response.headers.get('set-cookie').split(';')[0];}
 test('custom domain renders a logo-free password form and rejects anonymous admin reads',async()=>{
- const f=fixture();const response=await f.call('/admin/');assert.equal(response.status,200);const html=await response.text();assert.match(html,/Welcome back/);assert.match(html,/autocomplete="current-password"/);assert.doesNotMatch(html,/Sign in with ChatGPT|images\/logo|MDK Electronics/);
+ const f=fixture();const response=await f.call('/admin/');assert.equal(response.status,200);assert.equal(response.headers.get('referrer-policy'),'same-origin');const html=await response.text();assert.match(html,/Welcome back/);assert.match(html,/autocomplete="current-password"/);assert.doesNotMatch(html,/Sign in with ChatGPT|images\/logo|MDK Electronics/);
  assert.equal((await f.call('/api/admin/products',{headers:{'oai-authenticated-user-email':owner,'oai-authenticated-user-id':'spoof'}})).status,401);f.sqlite.close();
+});
+test('recovery pages preserve same-origin form submissions and reject opaque or foreign origins',async()=>{
+ const f=fixture();f.seed();
+ for(const path of ['/admin/forgot','/admin/reset?token='+'a'.repeat(64)]){
+  const response=await f.call(path);assert.equal(response.status,200);assert.equal(response.headers.get('referrer-policy'),'same-origin');
+ }
+ for(const source of ['null','https://other.test']){
+  const req=new Request(origin+'/admin/request-reset',{method:'POST',headers:{Origin:source,'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({email:owner})});
+  assert.equal((await storefront(req,f.env)).status,403);
+ }
+ const before=f.sqlite.prepare('SELECT password_hash FROM admin_credentials WHERE id=1').get().password_hash;
+ const forged=await f.call('/admin/reset',{form:{token:'f'.repeat(64),password:'some guessed private password',confirm:'some guessed private password'}});
+ assert.equal(forged.status,400);assert.equal(f.sqlite.prepare('SELECT password_hash FROM admin_credentials WHERE id=1').get().password_hash,before);
+ const other=await f.call('/admin/request-reset',{form:{email:'not-the-owner@example.test'}});assert.equal(other.status,200);assert.equal(f.messages.length,0);f.sqlite.close();
 });
 test('password login, actual product edits and logout work through the signed gateway',async()=>{
  const f=fixture();f.seed();const response=await f.call('/admin/login',{form:{email:owner,password:'wrong'}});assert.equal(response.status,401);
