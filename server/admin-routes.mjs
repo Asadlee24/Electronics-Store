@@ -16,15 +16,16 @@ export async function adminRoute(request,env){
    if(!request.headers.get('content-type')?.includes('application/x-www-form-urlencoded'))throw new ApiError(415,'Use the sign-in form.');
    const raw=await request.text();if(raw.length>8000)throw new ApiError(413,'Form is too large.');
    const form=new URLSearchParams(raw);
+   const replay=()=>new Request(request.url,{method:request.method,headers:request.headers,body:raw});
    if(mode==='reset'||mode==='verify')recoveryToken=/^[a-f0-9]{64}$/.test(form.get('token')||'')?form.get('token'):'';
-   if(path==='/admin/verify-email')return redirect('/admin/?email=updated',await confirmOwnerEmail(new Request(request,{body:raw}),env,recoveryToken));
-   if(path==='/admin/login')return redirect('/admin/',await signIn(new Request(request,{body:raw}),env,form));
-   if(path==='/admin/logout')return redirect('/admin/',await signOut(new Request(request,{body:raw}),env));
+   if(path==='/admin/verify-email')return redirect('/admin/?email=updated',await confirmOwnerEmail(replay(),env,recoveryToken));
+   if(path==='/admin/login')return redirect('/admin/',await signIn(replay(),env,form));
+   if(path==='/admin/logout')return redirect('/admin/',await signOut(replay(),env));
    if(path==='/admin/request-reset'){
-    await requestReset(new Request(request,{body:raw}),env,form,async({to,url,id})=>sendEmail(env,to,passwordEmail(url),'store-reset-'+id,'password-recovery'));
+    await requestReset(replay(),env,form,async({to,url,id})=>sendEmail(env,to,passwordEmail(url),'store-reset-'+id,'password-recovery'));
     return html(accessPage({mode:'sent'}));
    }
-   if(path==='/admin/reset')return redirect('/admin/?password=updated',await resetPassword(new Request(request,{body:raw}),env,form));
+   if(path==='/admin/reset')return redirect('/admin/?password=updated',await resetPassword(replay(),env,form));
    throw new ApiError(404,'Page not found.');
   }
   if(!['GET','HEAD'].includes(request.method))throw new ApiError(405,'Method not allowed.');
@@ -35,6 +36,7 @@ export async function adminRoute(request,env){
   if(await adminSession(request,env))return html(adminPage());
   return html(accessPage({message:url.searchParams.get('email')==='updated'?'Owner email verified. Use “Set or reset your password” to choose a new password from your inbox.':url.searchParams.get('password')==='updated'?'Password saved. Sign in with your new password.':''}));
  }catch(error){
+  if(!(error instanceof ApiError))console.error('Admin route unavailable',path,error?.name,String(error?.message||'').slice(0,180));
   // A Sites visitor still needs the platform owner identity. Vercel presents
   // only the app password form, using the signed server gateway instead.
   if(!request.headers.has('x-store-admin-signature')&&error.status===401&&!request.headers.has('oai-authenticated-user-id'))return html(accessPage({mode:'unavailable',message:'Open the private owner site and sign in to access its admin.'}),401);
