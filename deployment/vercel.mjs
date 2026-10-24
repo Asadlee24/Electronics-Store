@@ -37,6 +37,19 @@ export async function storefront(request,env=process.env,fetcher=fetch){
   }catch{return new Response(accessPage({mode:'unavailable',message:'Please try again shortly.'}),{status:503,headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'}});}
  }
 
+ if(path==='/api/contact'&&request.method==='POST'){
+  if(!hasBackend)return json({error:'Messages are temporarily unavailable. Please contact us on WhatsApp.'},503);
+  if(request.headers.get('origin')!==url.origin||!['same-origin','none',null].includes(request.headers.get('sec-fetch-site')))return json({error:'Please use the contact form on this site.'},403);
+  if(!request.headers.get('content-type')?.includes('application/json'))return json({error:'Send JSON data.'},415);
+  try{
+   const raw=await request.text();if(raw.length>10000)return json({error:'Your message is too large.'},413);
+   let parsed;try{parsed=JSON.parse(raw)}catch{return json({error:'Invalid message data.'},400)}if(!parsed||Array.isArray(parsed)||typeof parsed!=='object')return json({error:'Invalid message data.'},400);
+   const body=JSON.stringify(parsed),client=createHmac('sha256',secret).update('contact-client:'+(request.headers.get('x-vercel-forwarded-for')?.split(',')[0].trim()||'shared-visitor')).digest('hex'),time=String(Date.now());
+   const response=await fetcher(BACKEND_ORIGIN+'/api/contact',{method:'POST',headers:{'OAI-Sites-Authorization':'Bearer '+token,'Content-Type':'application/json',Origin:BACKEND_ORIGIN,'Sec-Fetch-Site':'same-origin','x-mdk-guest':client,'x-mdk-time':time,'x-mdk-signature':await signGuest(secret,client,time,'contact\n'+body)},body,redirect:'error',signal:AbortSignal.timeout(20000)});
+   if(!response.headers.get('content-type')?.includes('application/json'))throw Error('Invalid store response');return new Response(response.body,{status:response.status,headers:{'Content-Type':'application/json','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
+  }catch{return json({error:'We could not confirm your message. Please try again or contact us on WhatsApp.'},503)}
+ }
+
  if(!hasBackend){
   try{
    if(path==='/api/orders'&&request.method==='POST'){

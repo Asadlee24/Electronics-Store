@@ -43,7 +43,7 @@ export async function flushEmails(env){
  for(const row of rows.results||[]){
   // Atomic claim prevents concurrent checkout and retry handlers sending twice.
   const claimed=await env.DB.prepare("UPDATE email_outbox SET status='sending',attempts=attempts+1,next_attempt=? WHERE id=? AND status IN ('pending','failed')").bind(now+60000,row.id).run();if(!claimed.meta.changes)continue;
-  try{const providerId=await sendEmail(env,row.recipient,JSON.parse(row.payload),'store-order-'+row.id,'order');await env.DB.prepare("UPDATE email_outbox SET status='accepted',provider_id=?,last_error=NULL WHERE id=?").bind(providerId,row.id).run();}
+  try{const providerId=await sendEmail(env,row.recipient,JSON.parse(row.payload),'store-order-'+row.id,row.id.endsWith(':contact')?'contact':'order');await env.DB.prepare("UPDATE email_outbox SET status='accepted',provider_id=?,last_error=NULL WHERE id=?").bind(providerId,row.id).run();}
   catch(error){await env.DB.prepare("UPDATE email_outbox SET status='failed',last_error=?,next_attempt=? WHERE id=?").bind(/^Email provider error \d{3} \([a-z_]+\)$/.test(error.message)?error.message:'Provider did not accept the email',now+60000,row.id).run();}
  }
 }

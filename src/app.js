@@ -95,3 +95,12 @@ const slides={737:{name:'Hikvision 2MP Camera',kicker:'CCTV CAMERA',color:'#dedf
 const heroAssets={737:'/images/hikvision-hero-v2.png',842:'/images/handycam-hero-v2.png',571:'/images/speaker-hero-v2.png'};
 $$('[data-slide]').forEach(b=>b.addEventListener('click',()=>{const id=Number(b.dataset.slide),p=products.find(x=>x.id===id),s=slides[id];if(!p)return;const hero=$('#hero-product');hero.classList.remove('product-enter');void hero.offsetWidth;hero.classList.add('product-enter');const heroSrc=heroAssets[id]||p.images[0];$('#hero-image').src=heroSrc;hero.classList.toggle('has-source-photo',!heroAssets[id]);$('#hero-image').alt=p.name;$('#hero-name').textContent=p.name;$('#hero-price').textContent=money(p.price);$('#hero-kicker').textContent=s.kicker;$('#hero-link').href='/product/'+p.slug+'/';$('#hero-category').textContent=p.categories[0].toUpperCase();$('.showroom-index').textContent=s.index;$('.hero-outline').innerHTML=s.outline;showroom.style.setProperty('--scene',s.color);$$('[data-slide]').forEach(dot=>{dot.classList.toggle('active',dot===b);dot.setAttribute('aria-pressed',String(dot===b))})}));
 renderBag();renderWishlist();applyFilters();
+
+let contactAttempt=null;
+$('#contact-form')?.addEventListener('submit',async event=>{
+ event.preventDefault();const form=event.target;if(!form.reportValidity())return;
+ const fields=Object.fromEntries(new FormData(form)),signature=JSON.stringify(fields);
+ if(!contactAttempt||contactAttempt.signature!==signature)contactAttempt={signature,id:crypto.randomUUID()};
+ const button=form.querySelector('button[type="submit"]'),status=$('#contact-status');button.disabled=true;button.textContent='Sending…';status.textContent='';
+ try{const response=await fetch('/api/contact',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...fields,consent:form.elements.consent.checked,requestId:contactAttempt.id})});const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not send your message.');status.textContent='Message received. Reference '+data.reference+'. We’ll get back to you.';form.reset();contactAttempt=null;}catch(error){status.textContent=error.message;}finally{button.disabled=false;button.innerHTML='Send message '+icon('arrow');}
+});

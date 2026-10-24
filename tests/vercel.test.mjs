@@ -11,7 +11,7 @@ const env={MDK_SITES_SERVICE_TOKEN:'local-test-token',STOREFRONT_GATEWAY_SECRET:
 const request=(path,method='GET',body,headers={})=>new Request('https://shop.test'+path,{method,headers:{...headers,...(method==='POST'?{Origin:'https://shop.test','Content-Type':'application/json'}:{})},...(body!==undefined?{body:JSON.stringify(body)}:{})});
 function backend(){
  const sqlite=new DatabaseSync(':memory:');sqlite.exec(fs.readFileSync(new URL('../drizzle/0000_glorious_leo.sql',import.meta.url),'utf8'));
- sqlite.exec(fs.readFileSync(new URL('../drizzle/0001_slow_warhawk.sql',import.meta.url),'utf8'));sqlite.exec(fs.readFileSync(new URL('../drizzle/0002_hesitant_medusa.sql',import.meta.url),'utf8'));sqlite.exec(fs.readFileSync(new URL('../drizzle/0003_thankful_exiles.sql',import.meta.url),'utf8'));
+ sqlite.exec(fs.readFileSync(new URL('../drizzle/0001_slow_warhawk.sql',import.meta.url),'utf8'));sqlite.exec(fs.readFileSync(new URL('../drizzle/0002_hesitant_medusa.sql',import.meta.url),'utf8'));sqlite.exec(fs.readFileSync(new URL('../drizzle/0003_thankful_exiles.sql',import.meta.url),'utf8'));sqlite.exec(fs.readFileSync(new URL('../drizzle/0004_puzzling_queen_noir.sql',import.meta.url),'utf8'));
  const DB={prepare(sql){
   const stmt=sqlite.prepare(sql);let args=[];
   return{

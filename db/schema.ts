@@ -65,3 +65,10 @@ export const emailActivity = sqliteTable('email_activity', {
   lastError: text('last_error'),
   createdAt: integer('created_at').notNull()
 });
+export const contactMessages = sqliteTable('contact_messages', {
+  id: text('id').primaryKey(),
+  clientId: text('client_id').notNull(),
+  reference: text('reference').notNull().unique(),
+  payload: text('payload').notNull(),
+  createdAt: text('created_at').notNull()
+});

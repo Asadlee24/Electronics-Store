@@ -143,3 +143,24 @@ test('confirmed product deletion hides imported items permanently and preserves 
  assert.equal((await f.call('/product/hikvision-2mp-camera/')).status,404);assert.equal((await f.call('/api/admin/products/delete',{method:'POST',cookie,body:input})).status,404);
  const history=await(await f.call('/api/admin/orders',{cookie})).json();assert.equal(history.orders[0].items[0].id,737);assert.equal(history.orders[0].subtotal,3000);assert.equal(JSON.parse(f.sqlite.prepare('SELECT payload FROM catalogue_products WHERE id=737').get().payload).deleted,true);f.sqlite.close();
 });
+const contactInput=()=>({requestId:crypto.randomUUID(),name:'Contact customer',email:'visitor@example.test',phone:'03140000000',subject:'Product enquiry',message:'Please share the details for this camera. <script>not executable</script>',consent:true,website:''});
+test('public contact form saves once, emails only the store and appears in protected Messages',async()=>{
+ const f=fixture();f.seed();const cookie=await login(f),input=contactInput();const page=await f.call('/contact-us/');assert.match(await page.text(),/id="contact-form"/);
+ const response=await f.call('/api/contact',{method:'POST',body:input});assert.equal(response.status,201,await response.clone().text());const data=await response.json();assert.match(data.reference,/^MDK-M-/);assert.equal(data.saved,true);assert.equal(f.messages.length,1);assert.deepEqual(f.messages[0].body.to,[owner]);assert.equal(f.messages[0].body.reply_to,input.email);assert.match(f.messages[0].body.html,/&lt;script&gt;/);assert.doesNotMatch(f.messages[0].body.html,/<script>/);
+ const again=await(await f.call('/api/contact',{method:'POST',body:input})).json();assert.equal(again.reference,data.reference);assert.equal(f.messages.length,1);assert.equal(f.sqlite.prepare('SELECT count(*) as n FROM contact_messages').get().n,1);
+ assert.equal((await f.call('/api/contact',{method:'POST',body:{...input,message:'A different message with the same id'}})).status,409);
+ assert.equal((await f.call('/api/admin/messages')).status,401);const list=await(await f.call('/api/admin/messages',{cookie})).json();assert.equal(list.messages[0].message,input.message);assert.equal(list.messages[0].email,input.email);f.sqlite.close();
+});
+test('contact validation and persistent spam limits do not send messages to arbitrary recipients',async()=>{
+ const f=fixture();const input=contactInput();for(const patch of [{email:'bad-email'},{consent:false},{message:'short'},{phone:'not-a-phone'}])assert.equal((await f.call('/api/contact',{method:'POST',body:{...input,...patch}})).status,400);
+ assert.equal((await f.call('/api/contact',{method:'POST',body:{...input,website:'bot.example'}})).status,201);assert.equal(f.messages.length,0);assert.equal(f.sqlite.prepare('SELECT count(*) as n FROM contact_messages').get().n,0);
+ for(let i=0;i<3;i++)assert.equal((await f.call('/api/contact',{method:'POST',body:contactInput()})).status,201);
+ assert.equal((await f.call('/api/contact',{method:'POST',body:contactInput()})).status,429);assert.equal(f.messages.length,3);assert.ok(f.messages.every(m=>m.body.to.length===1&&m.body.to[0]===owner));f.sqlite.close();
+});
+test('contact signatures are scoped separately from orders and failed mail remains retryable',async()=>{
+ const {signGuest}=await import('../server/gateway-auth.mjs');const f=fixture(),input=contactInput(),body=JSON.stringify(input),time=String(Date.now()),id='a'.repeat(64);
+ const headers={Origin:BACKEND_ORIGIN,'Content-Type':'application/json','x-mdk-guest':id,'x-mdk-time':time,'x-mdk-signature':await signGuest(f.backend.STOREFRONT_GATEWAY_SECRET,id,time,body)};
+ assert.equal((await route(new Request(BACKEND_ORIGIN+'/api/contact',{method:'POST',headers,body}),f.backend)).status,401);
+ headers['x-mdk-signature']=await signGuest(f.backend.STOREFRONT_GATEWAY_SECRET,id,time,'contact\n'+body);assert.equal((await route(new Request(BACKEND_ORIGIN+'/api/orders',{method:'POST',headers,body}),f.backend)).status,401);
+ const original=f.backend.MAIL_FETCH;f.backend.MAIL_FETCH=async()=>Response.json({name:'rate_limit_exceeded'},{status:429});assert.equal((await f.call('/api/contact',{method:'POST',body:input})).status,201);assert.equal(f.sqlite.prepare("SELECT count(*) as n FROM email_outbox WHERE status='failed'").get().n,1);f.sqlite.prepare('UPDATE email_outbox SET next_attempt=0').run();f.backend.MAIL_FETCH=original;await flushEmails(f.backend);assert.equal(f.messages.length,1);assert.equal(f.sqlite.prepare("SELECT count(*) as n FROM email_activity WHERE purpose='contact' AND status='accepted'").get().n,1);f.sqlite.close();
+});

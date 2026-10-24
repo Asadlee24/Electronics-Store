@@ -1,4 +1,5 @@
 import {ApiError,identity,requireAdmin,requireSameOrigin,catalogue,validateProduct,validateOrder,imageType,orderMessage,STOCK_STATUSES} from './catalogue.mjs';
+import {saveContact} from './contact.mjs';
 import {gatewayGuest} from './gateway-auth.mjs';
 import {requireAdminSession,reauthenticate,requestOwnerEmailChange,limit} from './admin-auth.mjs';
 import {mailSettings,saveMailSettings} from './mail-settings.mjs';
@@ -50,6 +51,9 @@ export async function api(request,env){
     const type=imageType(bytes);if(!type||request.headers.get('content-type')?.split(';')[0]!==type.mime)throw new ApiError(415,'Use a JPG, PNG or WebP photo.');
     const key=crypto.randomUUID()+'.'+type.extension;await env.BUCKET.put(key,bytes,{httpMetadata:{contentType:type.mime}});return json({url:'/media/'+key},201);
    }
+   if(path==='/api/admin/messages'&&request.method==='GET'){
+    const rows=await env.DB.prepare('SELECT id,reference,payload,created_at FROM contact_messages ORDER BY created_at DESC LIMIT 100').all();return json({messages:(rows.results||[]).map(row=>({...JSON.parse(row.payload),id:row.id,reference:row.reference,createdAt:row.created_at}))});
+   }
    if(path==='/api/admin/orders'&&request.method==='GET'){
     const rows=await env.DB.prepare('SELECT id,reference,payload,status,revision,created_at,updated_at FROM order_requests ORDER BY created_at DESC LIMIT 100').all();
     const counts=await env.DB.prepare('SELECT status, count(*) as count FROM order_requests GROUP BY status').all();
@@ -92,6 +96,12 @@ export async function api(request,env){
     return new Response(message.html,{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'",'Referrer-Policy':'no-referrer'}});
    }
    throw new ApiError(404,'Admin action not found.');
+  }
+  if(path==='/api/contact'&&request.method==='POST'){
+   requireSameOrigin(request);const input=await readJSON(request);
+   const user=request.headers.has('x-mdk-guest')?await gatewayGuest(request,env,JSON.stringify(input),'contact'):identity(request);if(!user)throw new ApiError(401,'Store connection could not be verified.');
+   if(input.website)return json({saved:true,reference:'THANK-YOU'},201);
+   const saved=await saveContact(env,input,user.id);try{await flushEmails(env)}catch{console.error('Contact email queue unavailable')}return json(saved,201);
   }
   if(path==='/api/orders'&&request.method==='POST'){
    requireSameOrigin(request);
