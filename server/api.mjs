@@ -76,7 +76,7 @@ export async function api(request,env){
    if(path==='/api/admin/payments'&&request.method==='PATCH'){
     const input=await readJSON(request);if(!['verified','rejected'].includes(input.status)||typeof input.id!=='string'||!Number.isInteger(input.revision))throw new ApiError(400,'Choose a payment review result.');
     const row=await env.DB.prepare('SELECT reference,payload,revision FROM order_requests WHERE id=?').bind(input.id).first();if(!row)throw new ApiError(404,'Order not found.');if(row.revision!==input.revision)throw new ApiError(409,'The order changed. Reload before reviewing.');
-    const order=JSON.parse(row.payload);if(order.payment?.method!=='bank'||!order.payment.proof)throw new ApiError(400,'This order has no bank transfer proof.');
+    const order=JSON.parse(row.payload);if(!['bank','easypaisa'].includes(order.payment?.method)||!order.payment.proof)throw new ApiError(400,'This order has no transfer proof.');
     if(order.payment.status===input.status)return json({saved:true});
     const note=typeof input.note==='string'?input.note.trim():'';if(note.length>500)throw new ApiError(400,'Use a review note under 500 characters.');
     order.payment={...order.payment,status:input.status,reviewNote:note,reviewedAt:new Date().toISOString()};order.paymentStatus=input.status;

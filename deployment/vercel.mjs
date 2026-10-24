@@ -65,7 +65,7 @@ export async function storefront(request,env=process.env,fetcher=fetch){
     if(!request.headers.get('content-type')?.includes('application/json'))return json({error:'Send JSON data.'},415);
     const raw=await request.text();if(raw.length>2900000)return json({error:'Request is too large.'},413);
     let body;try{body=JSON.parse(raw);}catch{return json({error:'Invalid request data.'},400);}
-    if(body.payment?.method==='bank')return json({error:'Bank transfer orders are temporarily unavailable. Please contact the store.'},503);
+    if(['bank','easypaisa'].includes(body.payment?.method))return json({error:'Transfer orders are temporarily unavailable. Please contact the store.'},503);
     const order=validateOrder(body,originalProducts);
     const reference='MDK-'+randomUUID().slice(0,8).toUpperCase();
     return json({saved:false,reference,whatsappUrl:'https://wa.me/923145851509?text='+encodeURIComponent(orderMessage({...order,reference}))},201);

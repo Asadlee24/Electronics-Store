@@ -253,3 +253,13 @@ test('owner can remove messages and mail history without resending deleted messa
  assert.equal(f.messages.length,1);assert.equal((await(await f.call('/api/admin/messages',{cookie})).json()).messages.length,0);
  f.sqlite.close();
 });
+
+test('Easypaisa proof uses the configured wallet and follows private owner review',async()=>{
+ const f=fixture();f.seed();paymentBucket(f);const input=bankOrder();input.payment.method='easypaisa';input.payment.bank={accountNumber:'not-trusted'};
+ const result=await f.call('/api/orders',{method:'POST',body:input});assert.equal(result.status,201,await result.clone().text());
+ const cookie=await login(f),order=(await(await f.call('/api/admin/orders',{cookie})).json()).orders[0];
+ assert.equal(order.payment.method,'easypaisa');assert.equal(order.payment.bank.bank,'Easypaisa');assert.equal(order.payment.bank.accountNumber,'03460914818');assert.equal(order.payment.bank.accountTitle,'Nasir Ahmed');assert.equal(order.payment.status,'under_review');
+ assert.match(f.messages[0].body.text,/Easypaisa/);assert.equal(f.messages[0].body.attachments.length,1);
+ assert.equal((await f.call('/api/admin/payments',{cookie,method:'PATCH',body:{id:input.requestId,revision:1,status:'verified'}})).status,200);
+ assert.match(f.messages.at(-1).body.text,/Easypaisa/);f.sqlite.close();
+});

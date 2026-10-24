@@ -73,7 +73,7 @@ $('#product-quantity')?.addEventListener('change',e=>{e.target.value=Math.max(1,
 // The buyer reviews and sends the request themselves; no order or payment is fabricated.
 function requestId(){if(typeof crypto.randomUUID==='function')return crypto.randomUUID();const bytes=crypto.getRandomValues(new Uint8Array(16));bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;const hex=[...bytes].map(b=>b.toString(16).padStart(2,'0')).join('');return [hex.slice(0,8),hex.slice(8,12),hex.slice(12,16),hex.slice(16,20),hex.slice(20)].join('-');}
 let orderAttempt=null,proofPreviewUrl=null;
-function updatePaymentMethod(){const bank=$('input[name="paymentMethod"]:checked')?.value==='bank';$('#bank-transfer-fields').hidden=!bank;$('#payment-proof').required=bank;const email=$('#order-form input[name="email"]');email.required=bank;email.closest('label').querySelector('.optional').textContent=bank?'(for payment updates)':'(optional)';$('#order-form button[type="submit"]').innerHTML=(bank?'Submit order & proof':'Continue on WhatsApp')+' '+icon('upRight');}
+function updatePaymentMethod(){const method=$('input[name="paymentMethod"]:checked')?.value||'bank',button=$('#copy-bank-account'),account=JSON.parse(button.dataset.accounts)[method];$('#bank-transfer-fields').hidden=false;$('#payment-proof').required=true;const email=$('#order-form input[name="email"]');email.required=true;email.closest('label').querySelector('.optional').textContent='(for payment updates)';$('#payment-account-label').textContent=method==='easypaisa'?'MOBILE WALLET':'BANK TRANSFER';$('#payment-account-provider').textContent=account.bank;$('#payment-account-title').textContent=account.accountTitle;$('#payment-account-number').textContent=account.accountNumber;$('#payment-account-number-label').textContent=method==='easypaisa'?'Mobile number':'Account number';button.dataset.account=account.accountNumber;button.innerHTML='Copy '+(method==='easypaisa'?'mobile':'account')+' number '+icon('arrow');$('#order-form button[type="submit"]').innerHTML='Submit order & proof '+icon('upRight');}
 $$('input[name="paymentMethod"]').forEach(input=>input.addEventListener('change',updatePaymentMethod));
 if($('#order-form'))updatePaymentMethod();
 $('#copy-bank-account')?.addEventListener('click',async event=>{const button=event.currentTarget;try{await navigator.clipboard.writeText(button.dataset.account);button.textContent='Account number copied'}catch{button.textContent='Select and copy the account number above'}});
@@ -82,12 +82,12 @@ function proofBase64(file){return new Promise((resolve,reject)=>{const reader=ne
 
 $('#order-form')?.addEventListener('submit',async event=>{
  event.preventDefault();if(!event.target.reportValidity())return;
- const details=Object.fromEntries(new FormData(event.target)),bank=details.paymentMethod==='bank',file=$('#payment-proof').files[0];if(bank&&(!file||file.size>2*1024*1024)){event.target.reportValidity();return}const signature=JSON.stringify({bag,details,proof:bank?{name:file.name,size:file.size,modified:file.lastModified}:null});
+ const details=Object.fromEntries(new FormData(event.target)),bank=['bank','easypaisa'].includes(details.paymentMethod),file=$('#payment-proof').files[0];if(bank&&(!file||file.size>2*1024*1024)){event.target.reportValidity();return}const signature=JSON.stringify({bag,details,proof:bank?{name:file.name,size:file.size,modified:file.lastModified}:null});
  if(!orderAttempt||orderAttempt.signature!==signature)orderAttempt={signature,id:requestId()};
  const button=event.target.querySelector('button[type="submit"]'),status=$('#order-status');button.disabled=true;button.textContent='Saving request…';status.textContent='';
  const popup=bank?null:window.open('about:blank','_blank');if(popup)popup.opener=null;
  try{
-  const payment=bank?{method:'bank',senderName:details.senderName,transactionRef:details.transactionRef,proof:await proofBase64(file)}:{method:'whatsapp'};
+  const payment=bank?{method:details.paymentMethod,senderName:details.senderName,transactionRef:details.transactionRef,proof:await proofBase64(file)}:{method:'whatsapp'};
   const response=await fetch('/api/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({requestId:orderAttempt.id,items:bag,details,payment,consent:true})});
   const result=await response.json();if(!response.ok)throw new Error(result.error||'Could not save the request.');
   if(popup)popup.location=result.whatsappUrl;
