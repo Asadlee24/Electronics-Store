@@ -1,3 +1,4 @@
+import {Buffer} from 'node:buffer';
 import {escapeHTML as esc} from './catalogue.mjs';
 import {mailSettings,recordMail} from './mail-settings.mjs';
 const money=value=>'Rs. '+Number(value).toLocaleString('en-PK');
@@ -13,16 +14,24 @@ export function passwordEmail(url){
  return {subject,text:`Set your store password\n\nOpen this private link within 15 minutes:\n${url}\n\nThe link works once. Changing your password signs out existing sessions. If you did not request this, ignore this email.`,html:layout({title:subject,preview:'Your private password link. Valid for 15 minutes.',body:`<span style="font-size:11px;color:#7e8b78;letter-spacing:2px">PRIVATE ACCESS</span>${heading('A fresh start.')} ${p('Use the button below to set or reset your store password. This private link expires in 15 minutes and works once.')}${button('Set my password',url)}${p('Changing your password signs out existing sessions. If you did not request this, you can ignore this email.')}`})};
 }
 export function orderEmail(order,{owner=false,status=null}={}){
- const subject=status?`Order request ${status} · ${order.reference}`:owner?`New request · ${order.reference}`:`Your request · ${order.reference}`;
+ const bankTransfer=order.payment?.method==='bank';const paymentText=bankTransfer?`Bank transfer: ${order.payment.status.replaceAll('_',' ')}. ${order.payment.bank.bank} · ${order.payment.bank.accountTitle} · ${order.payment.bank.accountNumber}. ${order.payment.status==='verified'?'Transfer verified by the store.':order.payment.status==='rejected'?'Transfer not verified. Contact the store.':'Proof received; the store must verify the transfer.'}`:'Payment is not recorded. Confirm payment with the store.';
+ const subject=status?`Order request ${status} · ${order.reference}`:owner?`${bankTransfer?'Payment proof received':'New request'} · ${order.reference}`:`Your request · ${order.reference}`;
  const lines=order.items.map(i=>`${i.quantity} × ${i.name} — ${money(i.total)}`);
  const rows=order.items.map(i=>`<tr><td style="padding:14px 0;border-bottom:1px solid #eceee8;font-size:13px;line-height:1.7">${esc(i.name)}<br><span style="color:#89917f">Qty ${i.quantity}</span></td><td align="right" style="padding:14px 0;border-bottom:1px solid #eceee8;font-size:13px;white-space:nowrap">${esc(money(i.total))}</td></tr>`).join('');
  const title=status?'Your request is '+status+'.':owner?'A new order request.':'We have your request.';
- return {subject,text:[title,order.reference,'',...lines,'',`Product subtotal: ${money(order.subtotal)}`,status?'Contact the store for payment or delivery details.': 'Delivery and payment are not confirmed. The store will contact the customer to confirm availability and the final total.',...(owner?['',`Customer: ${order.customer.name}`,`Phone: ${order.customer.phone}`,`City: ${order.customer.city}`]:[])].join('\n'),html:layout({title:subject,preview:`${order.reference} · ${money(order.subtotal)} · ${status||'Pending confirmation'}`,body:`<span style="font-size:11px;color:#7e8b78;letter-spacing:2px">${esc(order.reference)}</span>${heading(title)}${p(status?'The store updated this request to '+status+'. Contact the store with any questions.':owner?'Review the items and contact the customer to confirm availability and delivery.':`Hi ${order.customer.name}, your request is saved. Our team will confirm availability, delivery charges and payment with you.`)}<table role="presentation" width="100%" cellspacing="0" cellpadding="0">${rows}<tr><td style="padding-top:20px;font-size:13px">Product subtotal</td><td align="right" style="padding-top:20px;font-size:18px;font-weight:bold">${esc(money(order.subtotal))}</td></tr></table>${owner?p(`${order.customer.name} · ${order.customer.phone} · ${order.customer.city}`):''}${p(status?'Payments are handled directly with the store.':'Pending confirmation. No payment has been taken.')}${button(owner?'Open order requests':'Visit the store',owner?'https://www.mdkelectronics.com/admin/#orders':'https://www.mdkelectronics.com')}`})};
+ return {subject,text:[title,order.reference,'',...lines,'',`Product subtotal: ${money(order.subtotal)}`,paymentText,status?'Contact the store for payment or delivery details.': 'Delivery and payment are not confirmed. The store will contact the customer to confirm availability and the final total.',...(owner?['',`Customer: ${order.customer.name}`,`Phone: ${order.customer.phone}`,`City: ${order.customer.city}`,`Address: ${order.customer.address}`,`Email: ${order.customer.email||'Not provided'}`,`Notes: ${order.customer.notes||'None'}`]:[])].join('\n'),html:layout({title:subject,preview:`${order.reference} · ${money(order.subtotal)} · ${status||'Pending confirmation'}`,body:`<span style="font-size:11px;color:#7e8b78;letter-spacing:2px">${esc(order.reference)}</span>${heading(title)}${p(status?'The store updated this request to '+status+'. Contact the store with any questions.':owner?'Review the items and contact the customer to confirm availability and delivery.':`Hi ${order.customer.name}, your request is saved. Our team will confirm availability, delivery charges and payment with you.`)}<table role="presentation" width="100%" cellspacing="0" cellpadding="0">${rows}<tr><td style="padding-top:20px;font-size:13px">Product subtotal</td><td align="right" style="padding-top:20px;font-size:18px;font-weight:bold">${esc(money(order.subtotal))}</td></tr></table>${p(paymentText)}${owner?p(`${order.customer.name} · ${order.customer.phone} · ${order.customer.city}`)+p(order.customer.address)+p(order.customer.email||'No customer email')+p(order.customer.notes||''):''}${p(bankTransfer?(order.payment.status==='verified'?'The store verified your bank transfer.':order.payment.status==='rejected'?'Please contact the store about your transfer.':'Your proof is received. The transfer is pending the store’s verification.'):status?'Payments are handled directly with the store.':'Pending confirmation. No payment has been taken.')}${button(owner?'Open order requests':'Visit the store',owner?'https://mdkelectronics.com/admin/#orders':'https://www.mdkelectronics.com')}`})};
 }
 export async function sendEmail(env,to,message,id,purpose='notification'){
  if(!env.RESEND_API_KEY)throw Error('Email is not configured');
  const fetcher=env.MAIL_FETCH||fetch,settings=await mailSettings(env);
- let response;try{response=await fetcher('https://api.resend.com/emails',{method:'POST',headers:{Authorization:'Bearer '+env.RESEND_API_KEY,'Content-Type':'application/json','Idempotency-Key':id},body:JSON.stringify({from:settings.sender,to:[to],reply_to:settings.replyTo,...message}),signal:AbortSignal.timeout(10000)})}catch{await recordMail(env,{purpose,recipient:to,status:'failed',error:'Email provider could not be reached'});throw Error('Email provider could not be reached');}
+ const {proofAttachment,...outbound}=message;
+ if(proofAttachment){
+  if(!/^payment-proofs\/[a-f0-9-]{36}$/.test(proofAttachment.key)||!['image/jpeg','image/png','image/webp'].includes(proofAttachment.mime))throw Error('Invalid proof attachment');
+  const object=await env.BUCKET?.get(proofAttachment.key);if(!object)throw Error('Payment proof attachment unavailable');
+  const bytes=Buffer.from(await object.arrayBuffer());if(bytes.length>2*1024*1024)throw Error('Payment proof attachment too large');
+  outbound.attachments=[{filename:proofAttachment.filename,content:bytes.toString('base64')}];
+ }
+ let response;try{response=await fetcher('https://api.resend.com/emails',{method:'POST',headers:{Authorization:'Bearer '+env.RESEND_API_KEY,'Content-Type':'application/json','Idempotency-Key':id},body:JSON.stringify({from:settings.sender,to:[to],reply_to:settings.replyTo,...outbound}),signal:AbortSignal.timeout(10000)})}catch{await recordMail(env,{purpose,recipient:to,status:'failed',error:'Email provider could not be reached'});throw Error('Email provider could not be reached');}
  if(!response.ok){let name='request_failed';try{const body=await response.json();if(/^[a-z_]{1,60}$/.test(body.name))name=body.name}catch{}
   const safe='Email provider error '+response.status+' ('+name+')';await recordMail(env,{purpose,recipient:to,status:'failed',error:safe});throw Error(safe);}
  const data=await response.json();if(!data.id)throw Error('Email provider response was incomplete');await recordMail(env,{purpose,recipient:to,status:'accepted',providerId:data.id});return data.id;
@@ -32,7 +41,7 @@ export async function queueOrderEmails(env,order,id){
  const settings=await mailSettings(env);
  for(const [kind,to] of [['owner',settings.notificationEmail],['customer',order.customer.email]]){
   if(!to)continue;
-  await env.DB.prepare("INSERT OR IGNORE INTO email_outbox (id,recipient,payload,status,created_at,attempts) VALUES (?,?,?,'pending',?,0)").bind(`${id}:${kind}`,to,JSON.stringify(orderEmail(order,{owner:kind==='owner'})),Date.now()).run();
+  await env.DB.prepare("INSERT OR IGNORE INTO email_outbox (id,recipient,payload,status,created_at,attempts) VALUES (?,?,?,'pending',?,0)").bind(`${id}:${kind}`,to,JSON.stringify({...orderEmail(order,{owner:kind==='owner'}),...(kind==='owner'&&order.payment?.proof?{proofAttachment:{key:order.payment.proof.key,mime:order.payment.proof.mime,filename:order.reference+'-payment-proof.'+order.payment.proof.extension}}:{})}),Date.now()).run();
  }
 }
 export async function flushEmails(env){
@@ -43,7 +52,7 @@ export async function flushEmails(env){
  for(const row of rows.results||[]){
   // Atomic claim prevents concurrent checkout and retry handlers sending twice.
   const claimed=await env.DB.prepare("UPDATE email_outbox SET status='sending',attempts=attempts+1,next_attempt=? WHERE id=? AND status IN ('pending','failed')").bind(now+60000,row.id).run();if(!claimed.meta.changes)continue;
-  try{const providerId=await sendEmail(env,row.recipient,JSON.parse(row.payload),'store-order-'+row.id,row.id.endsWith(':contact')?'contact':'order');await env.DB.prepare("UPDATE email_outbox SET status='accepted',provider_id=?,last_error=NULL WHERE id=?").bind(providerId,row.id).run();}
+  try{const providerId=await sendEmail(env,row.recipient,JSON.parse(row.payload),'store-order-'+row.id,row.id.endsWith(':contact')?'contact':row.id.includes(':payment:')?'payment-review':'order');await env.DB.prepare("UPDATE email_outbox SET status='accepted',provider_id=?,last_error=NULL WHERE id=?").bind(providerId,row.id).run();}
   catch(error){await env.DB.prepare("UPDATE email_outbox SET status='failed',last_error=?,next_attempt=? WHERE id=?").bind(/^Email provider error \d{3} \([a-z_]+\)$/.test(error.message)?error.message:'Provider did not accept the email',now+60000,row.id).run();}
  }
 }
@@ -61,4 +70,10 @@ export async function queueStatusEmails(env,order,id){
   const message=orderEmail(order,{owner:kind==='owner',status:order.status});
   await env.DB.prepare("INSERT OR IGNORE INTO email_outbox (id,recipient,payload,status,created_at,attempts) VALUES (?,?,?,'pending',?,0)").bind(`${id}:${kind}`,to,JSON.stringify(message),Date.now()).run();
  }
+}
+
+export function paymentReviewEmail(order,{owner=false}={}){
+ const status=order.payment.status,subject=`Payment ${status} · ${order.reference}`,note=order.payment.reviewNote||'';
+ const content=status==='verified'?'The store has verified the bank transfer.':'The store could not verify this transfer. Please contact the store with your order reference.';
+ return {subject,text:[order.reference,content,note,`Order subtotal: ${money(order.subtotal)}`,'Delivery and dispatch are confirmed separately by the store.'].filter(Boolean).join('\n'),html:layout({title:subject,preview:subject,body:heading(status==='verified'?'Payment verified.':'Payment needs attention.')+p(order.reference)+p(content)+(note?p(note):'')+p('Order subtotal: '+money(order.subtotal))+p('Delivery and dispatch are confirmed separately by the store.')+button(owner?'Review order':'Contact the store',owner?'https://mdkelectronics.com/admin/#orders':'https://mdkelectronics.com/contact-us/')})};
 }

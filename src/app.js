@@ -71,19 +71,29 @@ $$('[data-gallery]').forEach(b=>b.addEventListener('click',()=>{const image=$('#
 for(const [selector,delta] of [['#product-minus',-1],['#product-plus',1]])$(selector)?.addEventListener('click',()=>{const input=$('#product-quantity');input.value=Math.max(1,Math.min(MAX_QUANTITY,(Number(input.value)||1)+delta))});
 $('#product-quantity')?.addEventListener('change',e=>{e.target.value=Math.max(1,Math.min(MAX_QUANTITY,Math.floor(Number(e.target.value)||1)))});
 // The buyer reviews and sends the request themselves; no order or payment is fabricated.
-let orderAttempt=null;
+function requestId(){if(typeof crypto.randomUUID==='function')return crypto.randomUUID();const bytes=crypto.getRandomValues(new Uint8Array(16));bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;const hex=[...bytes].map(b=>b.toString(16).padStart(2,'0')).join('');return [hex.slice(0,8),hex.slice(8,12),hex.slice(12,16),hex.slice(16,20),hex.slice(20)].join('-');}
+let orderAttempt=null,proofPreviewUrl=null;
+function updatePaymentMethod(){const bank=$('input[name="paymentMethod"]:checked')?.value==='bank';$('#bank-transfer-fields').hidden=!bank;$('#payment-proof').required=bank;const email=$('#order-form input[name="email"]');email.required=bank;email.closest('label').querySelector('.optional').textContent=bank?'(for payment updates)':'(optional)';$('#order-form button[type="submit"]').innerHTML=(bank?'Submit order & proof':'Continue on WhatsApp')+' '+icon('upRight');}
+$$('input[name="paymentMethod"]').forEach(input=>input.addEventListener('change',updatePaymentMethod));
+$('#copy-bank-account')?.addEventListener('click',async event=>{const button=event.currentTarget;try{await navigator.clipboard.writeText(button.dataset.account);button.textContent='Account number copied'}catch{button.textContent='Select and copy the account number above'}});
+$('#payment-proof')?.addEventListener('change',event=>{const file=event.target.files[0],preview=$('#proof-preview');if(proofPreviewUrl)URL.revokeObjectURL(proofPreviewUrl);preview.hidden=true;event.target.setCustomValidity('');if(!file)return;if(!['image/jpeg','image/png','image/webp'].includes(file.type)||file.size>2*1024*1024){event.target.setCustomValidity('Use a JPG, PNG or WebP image up to 2 MB.');event.target.reportValidity();return}proofPreviewUrl=URL.createObjectURL(file);preview.src=proofPreviewUrl;preview.hidden=false;});
+function proofBase64(file){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(Error('Could not read the proof image. Choose it again.'));reader.readAsDataURL(file)});}
+
 $('#order-form')?.addEventListener('submit',async event=>{
  event.preventDefault();if(!event.target.reportValidity())return;
- const details=Object.fromEntries(new FormData(event.target));const signature=JSON.stringify({bag,details});
- if(!orderAttempt||orderAttempt.signature!==signature)orderAttempt={signature,id:crypto.randomUUID()};
+ const details=Object.fromEntries(new FormData(event.target)),bank=details.paymentMethod==='bank',file=$('#payment-proof').files[0];if(bank&&(!file||file.size>2*1024*1024)){event.target.reportValidity();return}const signature=JSON.stringify({bag,details,proof:bank?{name:file.name,size:file.size,modified:file.lastModified}:null});
+ if(!orderAttempt||orderAttempt.signature!==signature)orderAttempt={signature,id:requestId()};
  const button=event.target.querySelector('button[type="submit"]'),status=$('#order-status');button.disabled=true;button.textContent='Saving request…';status.textContent='';
- const popup=window.open('about:blank','_blank');if(popup)popup.opener=null;
+ const popup=bank?null:window.open('about:blank','_blank');if(popup)popup.opener=null;
  try{
-  const response=await fetch('/api/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({requestId:orderAttempt.id,items:bag,details,consent:true})});
+  const payment=bank?{method:'bank',senderName:details.senderName,transactionRef:details.transactionRef,proof:await proofBase64(file)}:{method:'whatsapp'};
+  const response=await fetch('/api/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({requestId:orderAttempt.id,items:bag,details,payment,consent:true})});
   const result=await response.json();if(!response.ok)throw new Error(result.error||'Could not save the request.');
   if(popup)popup.location=result.whatsappUrl;
-  status.innerHTML=`${result.saved===false?'Your order details are ready.':`Request <strong>${esc(result.reference)}</strong> saved.`} <a href="${esc(result.whatsappUrl)}" target="_blank" rel="noopener">Continue on WhatsApp ${icon('upRight')}</a>.`;
- }catch(error){if(popup)popup.close();status.textContent=error.message;}finally{button.disabled=false;button.innerHTML='Continue on WhatsApp '+icon('upRight');}
+  const next=`<a href="${esc(result.whatsappUrl)}" target="_blank" rel="noopener">Continue on WhatsApp ${icon('upRight')}</a>`;
+  status.innerHTML=bank&&result.proofReceived?`Order <strong>${esc(result.reference)}</strong> and proof received. Payment is pending verification. Updates will be sent to your email. ${next}.`:`${result.saved===false?'Your order details are ready.':`Request <strong>${esc(result.reference)}</strong> saved.`} ${next}.`;
+
+ }catch(error){if(popup)popup.close();status.textContent=error.message;}finally{button.disabled=false;button.innerHTML=(bank?'Submit order & proof':'Continue on WhatsApp')+' '+icon('upRight');}
 });
 // Original photography, gently suspended in a perspective showroom.
 const showroom=$('#showroom');
@@ -101,7 +111,7 @@ let contactAttempt=null;
 $('#contact-form')?.addEventListener('submit',async event=>{
  event.preventDefault();const form=event.target;if(!form.reportValidity())return;
  const fields=Object.fromEntries(new FormData(form)),signature=JSON.stringify(fields);
- if(!contactAttempt||contactAttempt.signature!==signature)contactAttempt={signature,id:crypto.randomUUID()};
+ if(!contactAttempt||contactAttempt.signature!==signature)contactAttempt={signature,id:requestId()};
  const button=form.querySelector('button[type="submit"]'),status=$('#contact-status');button.disabled=true;button.textContent='Sending…';status.textContent='';
  try{const response=await fetch('/api/contact',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...fields,consent:form.elements.consent.checked,requestId:contactAttempt.id})});const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not send your message.');status.textContent='Message received. Reference '+data.reference+'. We’ll get back to you.';form.reset();contactAttempt=null;}catch(error){status.textContent=error.message;}finally{button.disabled=false;button.innerHTML='Send message '+icon('arrow');}
 });

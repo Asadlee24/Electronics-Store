@@ -1,4 +1,7 @@
 import {ApiError,identity,requireAdmin,requireSameOrigin,catalogue,validateProduct,validateOrder,imageType,orderMessage,STOCK_STATUSES} from './catalogue.mjs';
+import {validatePayment,storePaymentProof,publicOrderResult} from './payments.mjs';
+import {paymentReviewEmail} from './emails.mjs';
+import {mailSettings as getPaymentMailSettings} from './mail-settings.mjs';
 import {heroSettings,saveHero} from './hero.mjs';
 import {saveContact} from './contact.mjs';
 import {gatewayGuest} from './gateway-auth.mjs';
@@ -6,7 +9,7 @@ import {requireAdminSession,reauthenticate,requestOwnerEmailChange,limit} from '
 import {mailSettings,saveMailSettings} from './mail-settings.mjs';
 import {queueOrderEmails,queueStatusEmails,flushEmails,orderEmail,passwordEmail,sendEmail,verificationEmail,testEmail} from './emails.mjs';
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
-async function readJSON(request){if(!request.headers.get('content-type')?.includes('application/json'))throw new ApiError(415,'Send JSON data.');const body=await request.clone().text();if(body.length>50000)throw new ApiError(413,'Request is too large.');try{const value=JSON.parse(body);if(!value||typeof value!=='object'||Array.isArray(value))throw Error();return value;}catch{throw new ApiError(400,'Invalid request data.')}}
+async function readJSON(request,max=50000){if(!request.headers.get('content-type')?.includes('application/json'))throw new ApiError(415,'Send JSON data.');const body=await request.clone().text();if(body.length>max)throw new ApiError(413,'Request is too large.');try{const value=JSON.parse(body);if(!value||typeof value!=='object'||Array.isArray(value))throw Error();return value;}catch{throw new ApiError(400,'Invalid request data.')}}
 export async function api(request,env){
  const path=new URL(request.url).pathname.replace(/\/$/,'');
  if(!path.startsWith('/api/')&&!path.startsWith('/media/'))return null;
@@ -57,6 +60,23 @@ export async function api(request,env){
    }
    if(path==='/api/admin/messages'&&request.method==='GET'){
     const rows=await env.DB.prepare('SELECT id,reference,payload,created_at FROM contact_messages ORDER BY created_at DESC LIMIT 100').all();return json({messages:(rows.results||[]).map(row=>({...JSON.parse(row.payload),id:row.id,reference:row.reference,createdAt:row.created_at}))});
+   }
+   if(path.startsWith('/api/admin/payment-proof/')&&request.method==='GET'){
+    const id=path.slice('/api/admin/payment-proof/'.length);if(!/^[a-f0-9-]{36}$/.test(id))throw new ApiError(404,'Proof not found.');
+    const row=await env.DB.prepare('SELECT reference,payload FROM order_requests WHERE id=?').bind(id).first();const proof=row&&JSON.parse(row.payload).payment?.proof;
+    if(!proof)throw new ApiError(404,'Proof not found.');const object=await env.BUCKET?.get(proof.key);if(!object)throw new ApiError(404,'Proof not found.');
+    return new Response(object.body,{headers:{'Content-Type':proof.mime,'Content-Disposition':`inline; filename="${row.reference}-proof.${proof.extension}"`,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; frame-ancestors 'self'; sandbox",'Referrer-Policy':'no-referrer'}});
+   }
+   if(path==='/api/admin/payments'&&request.method==='PATCH'){
+    const input=await readJSON(request);if(!['verified','rejected'].includes(input.status)||typeof input.id!=='string'||!Number.isInteger(input.revision))throw new ApiError(400,'Choose a payment review result.');
+    const row=await env.DB.prepare('SELECT reference,payload,revision FROM order_requests WHERE id=?').bind(input.id).first();if(!row)throw new ApiError(404,'Order not found.');if(row.revision!==input.revision)throw new ApiError(409,'The order changed. Reload before reviewing.');
+    const order=JSON.parse(row.payload);if(order.payment?.method!=='bank'||!order.payment.proof)throw new ApiError(400,'This order has no bank transfer proof.');
+    if(order.payment.status===input.status)return json({saved:true});
+    const note=typeof input.note==='string'?input.note.trim():'';if(note.length>500)throw new ApiError(400,'Use a review note under 500 characters.');
+    order.payment={...order.payment,status:input.status,reviewNote:note,reviewedAt:new Date().toISOString()};order.paymentStatus=input.status;
+    const result=await env.DB.prepare('UPDATE order_requests SET payload=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?').bind(JSON.stringify(order),new Date().toISOString(),input.id,input.revision).run();if(!result.meta.changes)throw new ApiError(409,'The order changed. Reload before reviewing.');
+    try{const settings=await getPaymentMailSettings(env);for(const [kind,to] of [['owner',settings.notificationEmail],['customer',order.customer.email]]){if(!to)continue;const message=paymentReviewEmail({...order,reference:row.reference},{owner:kind==='owner'});await env.DB.prepare("INSERT OR IGNORE INTO email_outbox (id,recipient,payload,status,created_at,attempts) VALUES (?,?,?,'pending',?,0)").bind(`${input.id}:payment:${input.revision+1}:${kind}`,to,JSON.stringify(message),Date.now()).run()}await flushEmails(env)}catch{console.error('Payment review email queue unavailable')}
+    return json({saved:true});
    }
    if(path==='/api/admin/orders'&&request.method==='GET'){
     const rows=await env.DB.prepare('SELECT id,reference,payload,status,revision,created_at,updated_at FROM order_requests ORDER BY created_at DESC LIMIT 100').all();
@@ -109,16 +129,16 @@ export async function api(request,env){
   }
   if(path==='/api/orders'&&request.method==='POST'){
    requireSameOrigin(request);
-   const input=await readJSON(request);
+   const input=await readJSON(request,2900000);
    const user=request.headers.has('x-mdk-guest')?await gatewayGuest(request,env,JSON.stringify(input)):identity(request);if(!user)throw new ApiError(401,'Sign in before submitting your request.');
    if(typeof input.requestId!=='string'||!/^[a-f0-9-]{36}$/.test(input.requestId))throw new ApiError(400,'Invalid request reference.');
    const previous=await env.DB.prepare('SELECT owner_id,reference,payload FROM order_requests WHERE id=?').bind(input.requestId).first();
-   if(previous){if(previous.owner_id!==user.id)throw new ApiError(409,'Use a new order reference.');const order={...JSON.parse(previous.payload),reference:previous.reference};return json({reference:order.reference,whatsappUrl:'https://wa.me/923145851509?text='+encodeURIComponent(orderMessage(order))});}
+   if(previous){if(previous.owner_id!==user.id)throw new ApiError(409,'Use a new order reference.');const order={...JSON.parse(previous.payload),reference:previous.reference};try{await queueOrderEmails(env,order,input.requestId);await flushEmails(env)}catch{console.error('Order email queue unavailable')}return json({...publicOrderResult(order),whatsappUrl:'https://wa.me/923145851509?text='+encodeURIComponent(orderMessage(order))});}
    const threshold=new Date(Date.now()-10*60*1000).toISOString();const recent=await env.DB.prepare('SELECT count(*) as count FROM order_requests WHERE owner_id=? AND created_at>?').bind(user.id,threshold).first();if(recent.count>=5)throw new ApiError(429,'Please wait before submitting another request.');
-   const order=validateOrder(input,await catalogue(env.DB));const now=new Date().toISOString();const reference='MDK-'+crypto.randomUUID().slice(0,8).toUpperCase();
+   const order=validateOrder(input,await catalogue(env.DB));const validated=validatePayment(input.payment);if(validated.bytes&&!order.customer.email)throw new ApiError(400,'Add your email for payment updates.');order.payment=await storePaymentProof(env,input.requestId,validated);order.paymentStatus=order.payment.status;const now=new Date().toISOString();const reference='MDK-'+crypto.randomUUID().slice(0,8).toUpperCase();
    await env.DB.prepare('INSERT INTO order_requests (id,owner_id,reference,payload,status,revision,created_at,updated_at) VALUES (?,?,?,?,\'pending\',1,?,?)').bind(input.requestId,user.id,reference,JSON.stringify(order),now,now).run();
    try{await queueOrderEmails(env,{...order,reference},input.requestId);await flushEmails(env);}catch{console.error('Order email queue unavailable');}
-   return json({reference,whatsappUrl:'https://wa.me/923145851509?text='+encodeURIComponent(orderMessage({...order,reference}))},201);
+   return json({...publicOrderResult({...order,reference}),whatsappUrl:'https://wa.me/923145851509?text='+encodeURIComponent(orderMessage({...order,reference}))},201);
   }
   throw new ApiError(404,'Page not found.');
  }catch(error){if(error instanceof ApiError)return json({error:error.message},error.status);console.error('Store API error',path,error?.name);return json({error:'The store could not complete this request. Please try again.'},500);}

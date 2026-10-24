@@ -63,8 +63,9 @@ export async function storefront(request,env=process.env,fetcher=fetch){
    if(path==='/api/orders'&&request.method==='POST'){
     if(request.headers.get('origin')!==url.origin&&['cross-site'].includes(request.headers.get('sec-fetch-site')))return json({error:'Please submit this request from the store.'},403);
     if(!request.headers.get('content-type')?.includes('application/json'))return json({error:'Send JSON data.'},415);
-    const raw=await request.text();if(raw.length>50000)return json({error:'Request is too large.'},413);
+    const raw=await request.text();if(raw.length>2900000)return json({error:'Request is too large.'},413);
     let body;try{body=JSON.parse(raw);}catch{return json({error:'Invalid request data.'},400);}
+    if(body.payment?.method==='bank')return json({error:'Bank transfer orders are temporarily unavailable. Please contact the store.'},503);
     const order=validateOrder(body,originalProducts);
     const reference='MDK-'+randomUUID().slice(0,8).toUpperCase();
     return json({saved:false,reference,whatsappUrl:'https://wa.me/923145851509?text='+encodeURIComponent(orderMessage({...order,reference}))},201);
@@ -92,7 +93,7 @@ export async function storefront(request,env=process.env,fetcher=fetch){
    if(request.headers.get('origin')!==url.origin||!['same-origin','none',null].includes(request.headers.get('sec-fetch-site')))return json({error:'Please submit this request from the store.'},403);
    if(!request.headers.get('content-type')?.includes('application/json'))return json({error:'Send JSON data.'},415);
    // Reading is bounded by the Node entry point as well as the backend.
-   const raw=await request.text();if(raw.length>50000)return json({error:'Request is too large.'},413);
+   const raw=await request.text();if(raw.length>2900000)return json({error:'Request is too large.'},413);
    let body;try{body=JSON.stringify(JSON.parse(raw));}catch{return json({error:'Invalid request data.'},400);}
    const cookie=request.headers.get('cookie')?.match(/(?:^|;\s*)mdk-guest=([a-f0-9-]{36})\.([a-f0-9]{64})(?:;|$)/);
    const mac=value=>createHmac('sha256',secret).update(value).digest('hex');
@@ -126,7 +127,7 @@ export default async function handler(req,res){
   const headers=new Headers();for(const [key,value] of Object.entries(req.headers))if(value!==undefined)headers.set(key,Array.isArray(value)?value.join(','):value);
   const host=headers.get('host');if(!host||!/^[-a-z0-9.:]+$/i.test(host))throw new Error('Invalid host');
   if(!req.url?.startsWith('/')||req.url.startsWith('//'))throw new Error('Invalid path');
-  let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>(req.url?.startsWith('/api/admin/upload')?4*1024*1024:50000)){res.statusCode=413;res.end('Request is too large.');return;}chunks.push(chunk);}
+  let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>(req.url?.startsWith('/api/admin/upload')?4*1024*1024:req.url?.split('?')[0]==='/api/orders'?2900000:50000)){res.statusCode=413;res.end('Request is too large.');return;}chunks.push(chunk);}
   const request=new Request('https://'+host+req.url,{method:req.method,headers,...(!['GET','HEAD'].includes(req.method)?{body:Buffer.concat(chunks)}:{})});
   const response=await storefront(request);res.statusCode=response.status;response.headers.forEach((value,key)=>{if(key!=='set-cookie')res.setHeader(key,value);});
   const cookies=response.headers.getSetCookie();if(cookies.length)res.setHeader('Set-Cookie',cookies);

@@ -198,3 +198,37 @@ test('homepage slides persist owner edits with revision checks and hide unpublis
  f.sqlite.prepare('INSERT INTO catalogue_products (id,slug,payload,revision,updated_at,updated_by) VALUES (?,?,?,1,?,?)').run(p.id,p.slug,JSON.stringify({...p,active:false}),new Date().toISOString(),'test');
  assert.doesNotMatch(await(await f.call('/')).text(),/data-slide="1002"/);f.sqlite.close();
 });
+
+const testProof=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l1sAAAAASUVORK5CYII=','base64');
+function paymentBucket(f){const objects=new Map();f.backend.BUCKET={async put(key,bytes,options){objects.set(key,{bytes:Buffer.from(bytes),options})},async get(key){const item=objects.get(key);return item?{body:item.bytes,arrayBuffer:async()=>Uint8Array.from(item.bytes).buffer}:null}};return objects}
+const bankOrder=()=>({requestId:crypto.randomUUID(),items:[{id:737,quantity:1}],details:{name:'Test payment buyer',phone:'03140000000',email:'buyer@example.test',address:'Local test address',city:'Peshawar'},payment:{method:'bank',proof:testProof.toString('base64'),senderName:'Test sender',transactionRef:'TEST-ONLY-123'},consent:true});
+test('bank proof remains private, emails the owner as an attachment and awaits admin review',async()=>{
+ const f=fixture();f.seed();const objects=paymentBucket(f),input=bankOrder();
+ const response=await f.call('/api/orders',{method:'POST',body:input});assert.equal(response.status,201,await response.clone().text());const saved=await response.json();assert.equal(saved.paymentStatus,'under_review');assert.equal(saved.proofReceived,true);assert.doesNotMatch(JSON.stringify(saved),/payment-proofs|base64/);
+ assert.equal(objects.size,1);assert.equal(f.messages.length,2);const ownerMail=f.messages.find(m=>m.body.to.includes(owner)),customerMail=f.messages.find(m=>m.body.to.includes(input.details.email));assert.equal(ownerMail.body.attachments.length,1);assert.equal(ownerMail.body.attachments[0].content,testProof.toString('base64'));assert.equal(customerMail.body.attachments,undefined);assert.equal(ownerMail.body.proofAttachment,undefined);assert.match(ownerMail.body.text,/1522218691001960/);assert.match(ownerMail.body.html,/Nasir Ahmed/);assert.match(ownerMail.body.html,/images\/logo.png/);
+ await f.call('/api/orders',{method:'POST',body:input});assert.equal(objects.size,1);assert.equal(f.messages.length,2);
+ assert.equal((await f.call('/api/admin/payment-proof/'+input.requestId)).status,401);
+ assert.equal((await f.call('/media/payment-proofs/'+input.requestId)).status,404);
+ assert.equal((await f.call('/api/admin/payments',{method:'PATCH',body:{id:input.requestId,revision:1,status:'verified'}})).status,401);
+ const cookie=await login(f);const proof=await f.call('/api/admin/payment-proof/'+input.requestId,{cookie});assert.equal(proof.status,200);assert.match(proof.headers.get('cache-control'),/no-store/);assert.deepEqual(Buffer.from(await proof.arrayBuffer()),testProof);
+ let order=(await(await f.call('/api/admin/orders',{cookie})).json()).orders[0];assert.equal(order.payment.status,'under_review');assert.equal(order.status,'pending');assert.equal(order.payment.bank.accountTitle,'Nasir Ahmed');
+ const review=await f.call('/api/admin/payments',{cookie,method:'PATCH',body:{id:input.requestId,revision:1,status:'verified',note:'Transfer checked. <script>not markup</script>'}});assert.equal(review.status,200);assert.equal(f.messages.length,4);assert.match(f.messages.at(-1).body.subject,/Payment verified/);assert.match(f.messages.at(-1).body.html,/&lt;script&gt;/);assert.doesNotMatch(f.messages.at(-1).body.html,/<script>/);
+ order=(await(await f.call('/api/admin/orders',{cookie})).json()).orders[0];assert.equal(order.paymentStatus,'verified');assert.equal(order.status,'pending');assert.equal(order.revision,2);
+ assert.equal((await f.call('/api/admin/payments',{cookie,method:'PATCH',body:{id:input.requestId,revision:1,status:'rejected'}})).status,409);f.sqlite.close();
+});
+test('bank proof validation rejects missing, oversized, non-image and unavailable uploads before saving orders',async()=>{
+ const f=fixture();f.seed();const objects=paymentBucket(f);
+ for(const payment of [{method:'bank'},{method:'bank',proof:Buffer.from('<svg>invalid image</svg>').toString('base64')},{method:'bank',proof:'A'.repeat(2800000)},{method:'unknown'}]){const r=await f.call('/api/orders',{method:'POST',body:{...bankOrder(),payment}});assert.equal(r.status,400,await r.clone().text())}
+ const missingEmail=bankOrder();missingEmail.details.email='';assert.equal((await f.call('/api/orders',{method:'POST',body:missingEmail})).status,400);assert.equal(objects.size,0);assert.equal(f.sqlite.prepare('SELECT count(*) as count FROM order_requests').get().count,0);
+ delete f.backend.BUCKET;assert.equal((await f.call('/api/orders',{method:'POST',body:bankOrder()})).status,503);assert.equal(f.messages.length,0);f.sqlite.close();
+});
+test('bank proof email retries read private storage and do not duplicate notifications',async()=>{
+ const f=fixture();f.seed();paymentBucket(f);let fail=true;f.backend.MAIL_FETCH=async(url,options)=>{if(fail)return Response.json({name:'rate_limit_exceeded'},{status:429});f.messages.push({body:JSON.parse(options.body),key:options.headers['Idempotency-Key']});return Response.json({id:'payment-mail-test'})};
+ const input=bankOrder();assert.equal((await f.call('/api/orders',{method:'POST',body:input})).status,201);assert.equal(f.sqlite.prepare("SELECT count(*) as count FROM email_outbox WHERE status='failed'").get().count,2);
+ fail=false;f.sqlite.prepare('UPDATE email_outbox SET next_attempt=0').run();await flushEmails(f.backend);assert.equal(f.messages.length,2);assert.equal(f.messages.find(m=>m.body.to.includes(owner)).body.attachments.length,1);await flushEmails(f.backend);assert.equal(f.messages.length,2);f.sqlite.close();
+});
+test('rejected payment notifies customer without changing fulfilment or accepting a second review twice',async()=>{
+ const f=fixture();f.seed();paymentBucket(f);const input=bankOrder();await f.call('/api/orders',{method:'POST',body:input});const cookie=await login(f);
+ const patch={id:input.requestId,revision:1,status:'rejected',note:'Transfer not found. Contact the store.'};assert.equal((await f.call('/api/admin/payments',{cookie,method:'PATCH',body:patch})).status,200);assert.match(f.messages.at(-1).body.subject,/Payment rejected/);
+ const order=(await(await f.call('/api/admin/orders',{cookie})).json()).orders[0];assert.equal(order.paymentStatus,'rejected');assert.equal(order.status,'pending');assert.equal((await f.call('/api/admin/payments',{cookie,method:'PATCH',body:patch})).status,409);assert.equal(f.messages.length,4);f.sqlite.close();
+});

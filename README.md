@@ -127,3 +127,10 @@ Password hashing uses native scrypt (N=16384, r=8, p=5; 16-byte random salt, 32-
 ## Contact form
 
 The Contact Us page accepts a name, email, optional phone, subject and message, with privacy consent. Guest submissions use a separate contact-scoped gateway signature, persistent per-client rate limits (three messages per 20 minutes), a honeypot and bounded input. Messages are saved to D1 and visible only to signed-in admins under Messages. The configured store notification inbox receives a branded email with the visitor as Reply-To. No automatic email is sent to an arbitrary visitor address. Duplicate request references do not duplicate messages or emails. Failed sends remain in the existing manual-retry outbox.
+
+
+### Bank transfer and payment proof
+
+Checkout offers WhatsApp confirmation or bank transfer to the account in `src/bank.json`. Bank orders require a customer email and a JPG, PNG or WebP receipt up to 2 MB. Proof files live under a private R2 prefix and are accessible only through an authenticated admin endpoint. Uploading a receipt sets payment to `under_review`; it never marks a transfer verified or changes fulfilment.
+
+Open an order in the admin workspace to view its receipt and verify or reject the transfer after checking the bank. Store notifications include the receipt attachment; customer notifications acknowledge receipt and report the admin review result. Failed deliveries remain in the existing email retry queue. Repeating the same saved order does not create another order, receipt or notification.
