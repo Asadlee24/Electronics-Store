@@ -21,8 +21,8 @@ function fixture(){
  return{sqlite,backend,env,call,messages,seed};
 }
 async function login(f){const response=await f.call('/admin/login',{form:{email:owner,password}});assert.equal(response.status,303,await response.clone().text());return response.headers.get('set-cookie').split(';')[0];}
-test('custom domain renders a logo-free password form and rejects anonymous admin reads',async()=>{
- const f=fixture();const response=await f.call('/admin/');assert.equal(response.status,200);assert.equal(response.headers.get('referrer-policy'),'same-origin');const html=await response.text();assert.match(html,/Welcome back/);assert.match(html,/autocomplete="current-password"/);assert.doesNotMatch(html,/Sign in with ChatGPT|images\/logo|MDK Electronics/);
+test('custom domain renders the branded password form and rejects anonymous admin reads',async()=>{
+ const f=fixture();const response=await f.call('/admin/');assert.equal(response.status,200);assert.equal(response.headers.get('referrer-policy'),'same-origin');const html=await response.text();assert.match(html,/Welcome back/);assert.match(html,/autocomplete="current-password"/);assert.match(html,/images\/logo.png/);assert.doesNotMatch(html,/Sign in with ChatGPT/);
  assert.equal((await f.call('/api/admin/products',{headers:{'oai-authenticated-user-email':owner,'oai-authenticated-user-id':'spoof'}})).status,401);f.sqlite.close();
 });
 test('recovery pages preserve same-origin form submissions and reject opaque or foreign origins',async()=>{
@@ -71,8 +71,8 @@ test('gateway signatures bind the method, path, body, cookie and public origin',
  const response=await route(new Request(BACKEND_ORIGIN+'/api/admin/products',{method:'POST',headers:{...headers,cookie:'__Host-store_admin='+'a'.repeat(64),Origin:BACKEND_ORIGIN,'Content-Type':'application/json'},body:'{"id":737}'}),f.backend);assert.equal(response.status,401);f.sqlite.close();
 });
 const order={reference:'TEST-ORDER',items:[{name:'Camera <test>',quantity:2,unitPrice:3000,total:6000}],subtotal:6000,customer:{name:'Buyer <test>',phone:'03140000000',city:'Peshawar',email:'buyer@example.test'}};
-test('email templates escape customer data and explain pending payment without logo images',()=>{
- const email=orderEmail(order);assert.match(email.html,/Buyer &lt;test&gt;/);assert.doesNotMatch(email.html,/<img|<svg|<script|MDK Electronics/);assert.match(email.text,/No payment|not confirmed/);assert.match(email.html,/No payment has been taken/);assert.ok(email.html.length<102400);
+test('email templates include the store logo and escape customer data',()=>{
+ const email=orderEmail(order);assert.match(email.html,/Buyer &lt;test&gt;/);assert.match(email.html,/https:\/\/mdkelectronics.com\/images\/logo.png/);assert.doesNotMatch(email.html,/<svg|<script/);assert.match(email.text,/No payment|not confirmed/);assert.match(email.html,/No payment has been taken/);assert.ok(email.html.length<102400);
  const reset=passwordEmail(origin+'/admin/reset?token='+'0'.repeat(64));assert.match(reset.text,/15 minutes/);assert.throws(()=>passwordEmail('https://evil.test/admin/reset'),/Invalid recovery/);
 });
 test('transactional outbox sends once and retries provider failures with the same idempotency key',async()=>{
@@ -121,4 +121,25 @@ test('new requests and status updates email the configured store inbox and custo
  const saved=await f.call('/api/orders',{method:'POST',body:input});assert.equal(saved.status,201,await saved.clone().text());assert.equal(f.messages.length,2);assert.deepEqual(f.messages.map(m=>m.body.to[0]).sort(),['buyer@example.test','client@example.test']);
  const status={id,revision:1,status:'dispatched'};assert.equal((await f.call('/api/admin/orders',{method:'PATCH',cookie,body:status})).status,200);assert.equal(f.messages.length,4);assert.match(f.messages[2].body.subject,/dispatched/);assert.doesNotMatch(f.messages[2].body.html,/Pending confirmation/);
  assert.equal((await f.call('/api/admin/orders',{method:'PATCH',cookie,body:{...status,revision:2}})).status,200);assert.equal(f.messages.length,4);f.sqlite.close();
+});
+test('hosting-owner recovery is applied once, clears the old lock by revision and revokes sessions',async()=>{
+ const f=fixture();f.seed();const cookie=await login(f);for(let i=0;i<8;i++)await f.call('/admin/login',{form:{email:owner,password:'wrong'}});
+ assert.equal((await f.call('/admin/login',{form:{email:owner,password}})).status,429);
+ const next='ownerTest1!',hash=await hashPassword(next),id='c'.repeat(64);Object.assign(f.backend,{ADMIN_RECOVERY_ID:id,ADMIN_RECOVERY_PASSWORD_HASH:hash,ADMIN_RECOVERY_EMAIL:'someone@example.test'});
+ await f.call('/admin/');assert.equal(f.sqlite.prepare('SELECT revision FROM admin_credentials').get().revision,1);
+ f.backend.ADMIN_RECOVERY_EMAIL=owner;await f.call('/admin/');await f.call('/admin/');const state=f.sqlite.prepare('SELECT revision,recovery_id,reset_hash FROM admin_credentials').get();assert.equal(state.revision,2);assert.equal(state.recovery_id,id);assert.equal(state.reset_hash,null);
+ assert.equal((await f.call('/api/admin/me',{cookie})).status,401);assert.equal((await f.call('/admin/login',{form:{email:owner,password:next}})).status,303);
+ delete f.backend.ADMIN_RECOVERY_ID;delete f.backend.ADMIN_RECOVERY_PASSWORD_HASH;delete f.backend.ADMIN_RECOVERY_EMAIL;
+ assert.equal((await f.call('/admin/login',{form:{email:owner,password:next}})).status,303);assert.equal((await f.call('/admin/login',{form:{email:owner,password}})).status,401);f.sqlite.close();
+});
+test('confirmed product deletion hides imported items permanently and preserves order history',async()=>{
+ const f=fixture();f.seed();const cookie=await login(f),input={id:737,revision:0,confirm:true};
+ const order={requestId:crypto.randomUUID(),items:[{id:737,quantity:1}],details:{name:'Customer',phone:'03140000000',address:'Test street',city:'Peshawar'},consent:true};await f.call('/api/orders',{method:'POST',body:order});
+ assert.equal((await f.call('/api/admin/products/delete',{method:'POST',body:input})).status,401);
+ assert.equal((await f.call('/api/admin/products/delete',{method:'POST',cookie,body:{...input,confirm:false}})).status,400);
+ assert.equal((await f.call('/api/admin/products/delete',{method:'POST',cookie,body:{...input,revision:99}})).status,409);
+ assert.equal((await f.call('/api/admin/products/delete',{method:'POST',cookie,body:input})).status,200);
+ const publicList=await(await f.call('/api/catalog')).json(),adminList=await(await f.call('/api/admin/products',{cookie})).json();assert.equal(publicList.some(p=>p.id===737),false);assert.equal(adminList.products.some(p=>p.id===737),false);
+ assert.equal((await f.call('/product/hikvision-2mp-camera/')).status,404);assert.equal((await f.call('/api/admin/products/delete',{method:'POST',cookie,body:input})).status,404);
+ const history=await(await f.call('/api/admin/orders',{cookie})).json();assert.equal(history.orders[0].items[0].id,737);assert.equal(history.orders[0].subtotal,3000);assert.equal(JSON.parse(f.sqlite.prepare('SELECT payload FROM catalogue_products WHERE id=737').get().payload).deleted,true);f.sqlite.close();
 });

@@ -20,6 +20,7 @@ export const orderRequests = sqliteTable('order_requests', {
 export const adminCredentials = sqliteTable('admin_credentials', {
   id: integer('id').primaryKey(),
   passwordHash: text('password_hash'),
+  recoveryId: text('recovery_id'),
   ownerEmail: text('owner_email'),
   pendingEmail: text('pending_email'),
   pendingEmailHash: text('pending_email_hash'),

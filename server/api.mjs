@@ -26,12 +26,22 @@ export async function api(request,env){
     if(input.id&&!existing)throw new ApiError(404,'Product not found.');
     if(existing&&input.revision!==existing.revision)throw new ApiError(409,'This product changed in another session. Reload before saving.');
     const product=validateProduct(input,existing);
+    const reserved=await env.DB.prepare('SELECT id FROM catalogue_products WHERE slug=?').bind(product.slug).first();
+    if(reserved&&reserved.id!==existing?.id)throw new ApiError(409,'That URL belongs to an existing or deleted product. Choose another URL.');
     if(products.some(p=>p.slug===product.slug&&p.id!==existing?.id))throw new ApiError(409,'That product URL is already in use.');
     product.id=existing?.id||(100000+crypto.getRandomValues(new Uint32Array(1))[0]);
     const at=new Date().toISOString();
     const result=await env.DB.prepare('INSERT INTO catalogue_products (id,slug,payload,revision,updated_at,updated_by) VALUES (?,?,?,1,?,?) ON CONFLICT(id) DO UPDATE SET slug=excluded.slug,payload=excluded.payload,revision=catalogue_products.revision+1,updated_at=excluded.updated_at,updated_by=excluded.updated_by WHERE catalogue_products.revision=?').bind(product.id,product.slug,JSON.stringify(product),at,user.id,existing?.revision||0).run();
     if(!result.meta.changes)throw new ApiError(409,'This product was changed elsewhere. Reload before saving.');
     return json({product:{...product,revision:(existing?.revision||0)+1}},existing?200:201);
+   }
+   if(path==='/api/admin/products/delete'&&request.method==='POST'){
+    const input=await readJSON(request);if(!Number.isInteger(input.id)||!Number.isInteger(input.revision)||input.confirm!==true)throw new ApiError(400,'Confirm the product you want to delete.');
+    const product=(await catalogue(env.DB,{all:true})).find(p=>p.id===input.id);if(!product)throw new ApiError(404,'Product not found.');
+    if(product.revision!==input.revision)throw new ApiError(409,'This product changed. Reload before deleting.');
+    const removed={...product,deleted:true,active:false,inStock:false};
+    const result=await env.DB.prepare('INSERT INTO catalogue_products (id,slug,payload,revision,updated_at,updated_by) VALUES (?,?,?,1,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,revision=catalogue_products.revision+1,updated_at=excluded.updated_at,updated_by=excluded.updated_by WHERE catalogue_products.revision=?').bind(product.id,product.slug,JSON.stringify(removed),new Date().toISOString(),user.id,product.revision).run();
+    if(!result.meta.changes)throw new ApiError(409,'This product changed. Reload before deleting.');return json({deleted:true});
    }
    if(path==='/api/admin/upload'&&request.method==='POST'){
     if(!env.BUCKET)throw new ApiError(503,'Photo storage is not available.');

@@ -26,7 +26,7 @@ export async function catalogue(db,{all=false}={}){
  const {results}=await db.prepare('SELECT id, payload, revision FROM catalogue_products').all();
  const merged=new Map(originalProducts.map(p=>[p.id,{...p,active:true,revision:0}]));
  for(const row of results||[])merged.set(row.id,{...JSON.parse(row.payload),revision:row.revision});
- return [...merged.values()].filter(p=>all||p.active!==false);
+ return [...merged.values()].filter(p=>p.deleted!==true&&(all||p.active!==false));
 }
 export function validateOrder(input,products){
  const details=input.details||{};

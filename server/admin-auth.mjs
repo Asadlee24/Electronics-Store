@@ -26,12 +26,22 @@ export async function adminContext(request,env){
   const time=request.headers.get('x-store-admin-time'),signature=request.headers.get('x-store-admin-signature'),origin=request.headers.get('x-store-public-origin'),client=request.headers.get('x-store-client');
   if(!env.ADMIN_GATEWAY_SECRET||env.ADMIN_GATEWAY_SECRET.length<32||!/^\d{13}$/.test(time||'')||Math.abs(Date.now()-Number(time))>120000||!/^[a-f0-9]{64}$/.test(signature||'')||!/^[a-f0-9]{64}$/.test(client||'')||!allowedOrigins(env).has(origin))throw new ApiError(401,'Admin connection could not be verified.');
   if(!await crypto.subtle.verify('HMAC',await key(env.ADMIN_GATEWAY_SECRET,'verify'),unhex(signature),await envelope(request,time,origin,client)))throw new ApiError(401,'Admin connection could not be verified.');
+  await applyOwnerRecovery(env,owner);
   return {origin,client,email:owner,id:'store-owner'};
  }
  const user=identity(request);
  if(!user)throw new ApiError(401,'Sign in to your owner account to continue.');
  if(!env.ADMIN_EMAIL||user.email!==owner)throw new ApiError(403,'This account cannot manage the store.');
+ await applyOwnerRecovery(env,owner);
  return {...user,origin:env.STORE_ORIGIN||'https://www.mdkelectronics.com',client:await digest(user.id)};
+}
+// A deployment-owner recovery is consumed once by nonce. Only the hosting
+// owner can provide these runtime secrets; browser input never controls them.
+async function applyOwnerRecovery(env,owner){
+ const id=env.ADMIN_RECOVERY_ID,hash=env.ADMIN_RECOVERY_PASSWORD_HASH;
+ if(!/^[a-f0-9]{64}$/.test(id||'')||!/^pbkdf2\$600000\$[a-f0-9]{32}\$[a-f0-9]{64}$/.test(hash||'')||String(env.ADMIN_RECOVERY_EMAIL||'').toLowerCase().trim()!==owner)return;
+ await env.DB.prepare('INSERT OR IGNORE INTO admin_credentials (id,revision) VALUES (1,0)').run();
+ await env.DB.prepare('UPDATE admin_credentials SET password_hash=?,recovery_id=?,revision=revision+1,reset_hash=NULL,reset_expires=NULL,reset_sent_at=NULL,pending_email=NULL,pending_email_hash=NULL,pending_email_expires=NULL WHERE id=1 AND (recovery_id IS NULL OR recovery_id<>?)').bind(hash,id,id).run();
 }
 export async function credentials(env){
  if(!env.DB||!env.ADMIN_EMAIL)throw new ApiError(503,'Admin setup is not available.');
@@ -39,7 +49,7 @@ export async function credentials(env){
  return env.DB.prepare('SELECT * FROM admin_credentials WHERE id=1').first();
 }
 export async function hashPassword(password){
- if(typeof password!=='string'||password.length<12||password.length>128)throw new ApiError(400,'Use a password with 12–128 characters.');
+ if(typeof password!=='string'||password.length<10||password.length>128)throw new ApiError(400,'Use a password with 10–128 characters.');
  const salt=crypto.getRandomValues(new Uint8Array(16));
  const imported=await crypto.subtle.importKey('raw',enc.encode(password),'PBKDF2',false,['deriveBits']);
  return `pbkdf2$600000$${hex(salt)}$${hex(await crypto.subtle.deriveBits({name:'PBKDF2',salt,iterations:600000,hash:'SHA-256'},imported,256))}`;
@@ -53,7 +63,8 @@ export async function verifyPassword(password,stored){
  let difference=0;for(let i=0;i<64;i++)difference|=result.charCodeAt(i)^parts[2].charCodeAt(i);return difference===0;
 }
 export async function limit(env,client,action,max=8,period=900000){
- const now=Date.now(),bucket=Math.floor(now/period),id=await digest(`${client}:${action}:${bucket}`);
+ const revision=(await env.DB.prepare('SELECT revision FROM admin_credentials WHERE id=1').first())?.revision||0;
+ const now=Date.now(),bucket=Math.floor(now/period),id=await digest(`${revision}:${client}:${action}:${bucket}`);
  await env.DB.prepare('DELETE FROM admin_attempts WHERE expires_at<?').bind(now).run();
  const row=await env.DB.prepare('INSERT INTO admin_attempts (id,count,expires_at) VALUES (?,1,?) ON CONFLICT(id) DO UPDATE SET count=count+1 RETURNING count').bind(id,now+period).first();
  if(row.count>max)throw new ApiError(429,'Too many attempts. Please try again later.');
