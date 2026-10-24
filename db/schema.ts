@@ -57,6 +57,7 @@ export const mailSettings = sqliteTable('mail_settings', {
   updatedAt: integer('updated_at').notNull()
 });
 export const emailActivity = sqliteTable('email_activity', {
+  deletedAt: integer('deleted_at'),
   id: text('id').primaryKey(),
   purpose: text('purpose').notNull(),
   recipient: text('recipient').notNull(),
@@ -66,6 +67,7 @@ export const emailActivity = sqliteTable('email_activity', {
   createdAt: integer('created_at').notNull()
 });
 export const contactMessages = sqliteTable('contact_messages', {
+  deletedAt: integer('deleted_at'),
   id: text('id').primaryKey(),
   clientId: text('client_id').notNull(),
   reference: text('reference').notNull().unique(),

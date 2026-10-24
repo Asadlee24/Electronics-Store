@@ -232,3 +232,24 @@ test('rejected payment notifies customer without changing fulfilment or acceptin
  const patch={id:input.requestId,revision:1,status:'rejected',note:'Transfer not found. Contact the store.'};assert.equal((await f.call('/api/admin/payments',{cookie,method:'PATCH',body:patch})).status,200);assert.match(f.messages.at(-1).body.subject,/Payment rejected/);
  const order=(await(await f.call('/api/admin/orders',{cookie})).json()).orders[0];assert.equal(order.paymentStatus,'rejected');assert.equal(order.status,'pending');assert.equal((await f.call('/api/admin/payments',{cookie,method:'PATCH',body:patch})).status,409);assert.equal(f.messages.length,4);f.sqlite.close();
 });
+
+test('owner can remove messages and mail history without resending deleted messages or changing delivery records',async()=>{
+ const f=fixture();f.seed();const cookie=await login(f),id=crypto.randomUUID();
+ const input={requestId:id,name:'Contact test',email:'customer@example.test',phone:'',subject:'A message to remove',message:'Please tell me about stock availability.',consent:true};
+ assert.equal((await f.call('/api/contact',{method:'POST',body:input})).status,201);
+ const activity=f.sqlite.prepare('SELECT id FROM email_activity LIMIT 1').get();assert.ok(activity);
+ for(const [path,recordId] of [['messages',id],['mail',activity.id]]){
+  const endpoint='/api/admin/'+path+'/delete';
+  assert.equal((await f.call(endpoint,{method:'POST',body:{id:recordId,confirm:true}})).status,401);
+  assert.equal((await storefront(new Request(origin+endpoint,{method:'POST',headers:{cookie,Origin:'https://foreign.test','Content-Type':'application/json'},body:JSON.stringify({id:recordId,confirm:true})}),f.env)).status,403);
+  assert.equal((await f.call(endpoint,{method:'POST',cookie,body:{id:recordId}})).status,400);
+  assert.equal((await f.call(endpoint,{method:'POST',cookie,body:{id:recordId,confirm:true}})).status,200);
+  assert.equal((await f.call(endpoint,{method:'POST',cookie,body:{id:recordId,confirm:true}})).status,404);
+ }
+ assert.equal((await(await f.call('/api/admin/messages',{cookie})).json()).messages.length,0);
+ assert.equal((await(await f.call('/api/admin/mail',{cookie})).json()).recent.length,0);
+ assert.equal(f.sqlite.prepare('SELECT count(*) n FROM email_outbox').get().n,1);
+ assert.equal((await f.call('/api/contact',{method:'POST',body:input})).status,201);
+ assert.equal(f.messages.length,1);assert.equal((await(await f.call('/api/admin/messages',{cookie})).json()).messages.length,0);
+ f.sqlite.close();
+});

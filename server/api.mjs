@@ -58,8 +58,14 @@ export async function api(request,env){
     const type=imageType(bytes);if(!type||request.headers.get('content-type')?.split(';')[0]!==type.mime)throw new ApiError(415,'Use a JPG, PNG or WebP photo.');
     const key=crypto.randomUUID()+'.'+type.extension;await env.BUCKET.put(key,bytes,{httpMetadata:{contentType:type.mime}});return json({url:'/media/'+key},201);
    }
+   if(['/api/admin/messages/delete','/api/admin/mail/delete'].includes(path)&&request.method==='POST'){
+    const input=await readJSON(request);if(typeof input.id!=='string'||! /^[a-f0-9-]{36}$/.test(input.id)||input.confirm!==true)throw new ApiError(400,'Confirm the record you want to delete.');
+    const table=path==='/api/admin/messages/delete'?'contact_messages':'email_activity';
+    const result=await env.DB.prepare(`UPDATE ${table} SET deleted_at=? WHERE id=? AND deleted_at IS NULL`).bind(Date.now(),input.id).run();
+    if(!result.meta.changes)throw new ApiError(404,'This record was already deleted or could not be found.');return json({deleted:true});
+   }
    if(path==='/api/admin/messages'&&request.method==='GET'){
-    const rows=await env.DB.prepare('SELECT id,reference,payload,created_at FROM contact_messages ORDER BY created_at DESC LIMIT 100').all();return json({messages:(rows.results||[]).map(row=>({...JSON.parse(row.payload),id:row.id,reference:row.reference,createdAt:row.created_at}))});
+    const rows=await env.DB.prepare('SELECT id,reference,payload,created_at FROM contact_messages WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 100').all();return json({messages:(rows.results||[]).map(row=>({...JSON.parse(row.payload),id:row.id,reference:row.reference,createdAt:row.created_at}))});
    }
    if(path.startsWith('/api/admin/payment-proof/')&&request.method==='GET'){
     const id=path.slice('/api/admin/payment-proof/'.length);if(!/^[a-f0-9-]{36}$/.test(id))throw new ApiError(404,'Proof not found.');
@@ -93,7 +99,7 @@ export async function api(request,env){
    }
    if(path==='/api/admin/mail'&&request.method==='GET'){
     const rows=await env.DB.prepare('SELECT status,count(*) as count FROM email_outbox GROUP BY status').all();
-    const recent=await env.DB.prepare('SELECT id,purpose,recipient,status,provider_id,last_error,created_at FROM email_activity ORDER BY created_at DESC LIMIT 20').all();
+    const recent=await env.DB.prepare('SELECT id,purpose,recipient,status,provider_id,last_error,created_at FROM email_activity WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 20').all();
     const pending=await env.DB.prepare('SELECT pending_email,pending_email_expires FROM admin_credentials WHERE id=1').first();
     return json({configured:!!env.RESEND_API_KEY,...await mailSettings(env),pendingEmail:pending?.pending_email_expires>Date.now()?pending.pending_email:null,counts:rows.results||[],recent:recent.results||[]});
    }
