@@ -2,9 +2,8 @@
 
 A camera, audio and electronics storefront with a persistent store admin.
 
-**Store:** https://mdk-electronics-preview.asadaly416.chatgpt.site
+**Store:** [https://mdk-electronics-preview.asadaly416.chatgpt.site](https://mdkelectronics.com/)
 
-**Admin:** https://mdk-electronics-preview.asadaly416.chatgpt.site/admin/
 
 The backend preview is owner-private. The custom-domain admin uses an email and personal password. Set the initial password using the private email link on the login screen.
 
