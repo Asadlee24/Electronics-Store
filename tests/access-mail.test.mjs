@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {DatabaseSync} from 'node:sqlite';
-import {storefront,BACKEND_ORIGIN} from '../deployment/vercel.mjs';
+import {storefront,BACKEND_ORIGIN,adminSessionCookies} from '../deployment/vercel.mjs';
 import {route} from '../server/router.mjs';
 import {hashPassword,digest,adminGatewayHeaders} from '../server/admin-auth.mjs';
 import {orderEmail,passwordEmail,queueOrderEmails,flushEmails} from '../server/emails.mjs';
@@ -21,6 +21,25 @@ function fixture(){
  return{sqlite,backend,env,call,messages,seed};
 }
 async function login(f){const response=await f.call('/admin/login',{form:{email:owner,password}});assert.equal(response.status,303,await response.clone().text());return response.headers.get('set-cookie').split(';')[0];}
+test('browser login keeps the host-only session separate from private edge cookies',async()=>{
+ const f=fixture();f.seed();
+ const submit=new Request(origin+'/admin/login',{method:'POST',headers:{Origin:origin,'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({email:owner,password})});
+ const response=await storefront(submit,f.env,async(url,options)=>{
+  const result=await route(new Request(url,options),f.backend);
+  const headers=new Headers(result.headers);
+  // Model both separate and folded Set-Cookie headers from an edge proxy.
+  headers.set('Set-Cookie','edge_session=test; Path=/; Domain=.chatgpt.site; Expires=Wed, 21 Oct 2026 07:28:00 GMT, '+headers.get('set-cookie')+', edge_bot=test; Path=/; Domain=.chatgpt.site');
+  return new Response(result.body,{status:result.status,headers});
+ });
+ assert.equal(response.status,303);assert.equal(response.headers.get('location'),'/admin/');
+ const cookies=response.headers.getSetCookie();assert.equal(cookies.length,1);assert.match(cookies[0],/^__Host-store_admin=[a-f0-9]{64};/);assert.doesNotMatch(cookies[0],/Domain=|edge_|,/);
+ const cookie=cookies[0].split(';')[0];
+ const dashboard=await f.call('/admin/',{cookie});assert.match(await dashboard.text(),/id="admin-main"/);
+ assert.equal((await f.call('/api/admin/me',{cookie})).status,200);
+ const separate=new Headers();separate.append('Set-Cookie','edge=test; Domain=.chatgpt.site');separate.append('Set-Cookie',cookies[0]);assert.deepEqual(adminSessionCookies(separate),cookies);
+ assert.deepEqual(adminSessionCookies(new Headers({'Set-Cookie':'__Host-store_admin=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0'})),['__Host-store_admin=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0']);
+ f.sqlite.close();
+});
 test('custom domain renders the branded password form and rejects anonymous admin reads',async()=>{
  const f=fixture();const response=await f.call('/admin/');assert.equal(response.status,200);assert.equal(response.headers.get('referrer-policy'),'same-origin');const html=await response.text();assert.match(html,/Welcome back/);assert.match(html,/autocomplete="current-password"/);assert.match(html,/images\/logo.png/);assert.doesNotMatch(html,/Sign in with ChatGPT/);
  assert.equal((await f.call('/api/admin/products',{headers:{'oai-authenticated-user-email':owner,'oai-authenticated-user-id':'spoof'}})).status,401);f.sqlite.close();

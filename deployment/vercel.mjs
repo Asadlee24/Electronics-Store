@@ -10,6 +10,13 @@ import {validateOrder,orderMessage} from '../server/catalogue.mjs';
 // visitor cookies, identity headers, arbitrary URLs, or admin API requests.
 export const BACKEND_ORIGIN='https://mdk-electronics-preview.asadaly416.chatgpt.site';
 const json=(value,status)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
+// Upstream edge cookies belong to the private backend, not the public store.
+// Never combine them with the host-only admin cookie: a backend Domain
+// attribute on a combined Set-Cookie line makes browsers reject the session.
+export function adminSessionCookies(headers){
+ const values=typeof headers.getSetCookie==='function'?headers.getSetCookie():[headers.get('set-cookie')||''];
+ return values.flatMap(value=>value.split(/,(?=\s*[^\s;,=]+\s*=)/)).map(value=>value.trim()).filter(value=>/^__Host-store_admin=[a-f0-9]*;/.test(value));
+}
 export async function storefront(request,env=process.env,fetcher=fetch){
  const url=new URL(request.url),path=url.pathname.replace(/\/$/,'')||'/';
  const token=env.MDK_SITES_SERVICE_TOKEN,secret=env.STOREFRONT_GATEWAY_SECRET;
@@ -30,7 +37,8 @@ export async function storefront(request,env=process.env,fetcher=fetch){
    // Keep the browser Origin on same-site form posts; suppress referrers
    // on external navigation so recovery tokens cannot leak to other sites.
    const headers=new Headers({'Content-Type':response.headers.get('content-type')||'text/plain','Cache-Control':'no-store','Referrer-Policy':'same-origin','X-Content-Type-Options':'nosniff'});
-   for(const name of ['set-cookie','content-security-policy','x-frame-options']){let value=response.headers.get(name);if(value){if(name==='set-cookie')value=value.replace(/SameSite=Strict/i,'SameSite=Lax');headers.set(name,value);}}
+   for(const name of ['content-security-policy','x-frame-options']){const value=response.headers.get(name);if(value)headers.set(name,value);}
+   for(const cookie of adminSessionCookies(response.headers))headers.append('Set-Cookie',cookie.replace(/SameSite=Strict/i,'SameSite=Lax'));
    const location=response.headers.get('location');
    if(location){if(!location.startsWith('/admin')||location.startsWith('//'))throw Error('Unexpected admin redirect');headers.set('Location',location);}
    return new Response(response.body,{status:response.status,headers});
@@ -118,6 +126,8 @@ export default async function handler(req,res){
   if(!req.url?.startsWith('/')||req.url.startsWith('//'))throw new Error('Invalid path');
   let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>(req.url?.startsWith('/api/admin/upload')?4*1024*1024:50000)){res.statusCode=413;res.end('Request is too large.');return;}chunks.push(chunk);}
   const request=new Request('https://'+host+req.url,{method:req.method,headers,...(!['GET','HEAD'].includes(req.method)?{body:Buffer.concat(chunks)}:{})});
-  const response=await storefront(request);res.statusCode=response.status;response.headers.forEach((value,key)=>res.setHeader(key,value));res.end(req.method==='HEAD'?undefined:Buffer.from(await response.arrayBuffer()));
+  const response=await storefront(request);res.statusCode=response.status;response.headers.forEach((value,key)=>{if(key!=='set-cookie')res.setHeader(key,value);});
+  const cookies=response.headers.getSetCookie();if(cookies.length)res.setHeader('Set-Cookie',cookies);
+  res.end(req.method==='HEAD'?undefined:Buffer.from(await response.arrayBuffer()));
  }catch{res.statusCode=400;res.end('Invalid request.');}
 }
