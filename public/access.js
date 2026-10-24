@@ -7,6 +7,10 @@ document.querySelectorAll('[data-toggle]').forEach(button=>{
 document.querySelector('.access-form')?.addEventListener('submit',event=>{
  const password=event.target.elements.password,confirm=event.target.elements.confirm;
  if(confirm&&password.value!==confirm.value){event.preventDefault();confirm.setCustomValidity('The passwords do not match.');confirm.reportValidity();return;}
- const button=event.target.querySelector('button[type="submit"]');button.disabled=true;button.textContent='Please wait…';
+ // Preserve the native HTML form submission, especially on mobile Safari.
+ // Disabling the active submitter during the submit event can interrupt
+ // navigation on some WebKit versions. Keep the button enabled.
+ const button=event.target.querySelector('button[type="submit"]');
+ if(button){button.setAttribute('aria-busy','true');button.textContent='Signing in…';}
 });
 document.querySelector('#confirm')?.addEventListener('input',event=>event.target.setCustomValidity(''));
