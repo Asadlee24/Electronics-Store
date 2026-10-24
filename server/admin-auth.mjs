@@ -1,3 +1,4 @@
+import {scryptSync,timingSafeEqual} from 'node:crypto';
 import {ApiError,identity,requireSameOrigin} from './catalogue.mjs';
 import {ownerEmail,emailAddress} from './mail-settings.mjs';
 const enc = new TextEncoder();
@@ -39,7 +40,7 @@ export async function adminContext(request,env){
 // owner can provide these runtime secrets; browser input never controls them.
 async function applyOwnerRecovery(env,owner){
  const id=env.ADMIN_RECOVERY_ID,hash=env.ADMIN_RECOVERY_PASSWORD_HASH;
- if(!/^[a-f0-9]{64}$/.test(id||'')||!/^pbkdf2\$600000\$[a-f0-9]{32}\$[a-f0-9]{64}$/.test(hash||'')||String(env.ADMIN_RECOVERY_EMAIL||'').toLowerCase().trim()!==owner)return;
+ if(!/^[a-f0-9]{64}$/.test(id||'')||!/^scrypt\$16384\$8\$5\$[a-f0-9]{32}\$[a-f0-9]{64}$/.test(hash||'')||String(env.ADMIN_RECOVERY_EMAIL||'').toLowerCase().trim()!==owner)return;
  await env.DB.prepare('INSERT OR IGNORE INTO admin_credentials (id,revision) VALUES (1,0)').run();
  await env.DB.prepare('UPDATE admin_credentials SET password_hash=?,recovery_id=?,revision=revision+1,reset_hash=NULL,reset_expires=NULL,reset_sent_at=NULL,pending_email=NULL,pending_email_hash=NULL,pending_email_expires=NULL WHERE id=1 AND (recovery_id IS NULL OR recovery_id<>?)').bind(hash,id,id).run();
 }
@@ -48,19 +49,19 @@ export async function credentials(env){
  await env.DB.prepare('INSERT OR IGNORE INTO admin_credentials (id,revision) VALUES (1,0)').run();
  return env.DB.prepare('SELECT * FROM admin_credentials WHERE id=1').first();
 }
+// Native scrypt avoids the production Workers WebCrypto PBKDF2 ceiling.
+// Fixed parameters bound work and memory; arbitrary stored parameters are rejected.
+const scryptOptions={N:16384,r:8,p:5,maxmem:32*1024*1024};
 export async function hashPassword(password){
  if(typeof password!=='string'||password.length<10||password.length>128)throw new ApiError(400,'Use a password with 10–128 characters.');
  const salt=crypto.getRandomValues(new Uint8Array(16));
- const imported=await crypto.subtle.importKey('raw',enc.encode(password),'PBKDF2',false,['deriveBits']);
- return `pbkdf2$600000$${hex(salt)}$${hex(await crypto.subtle.deriveBits({name:'PBKDF2',salt,iterations:600000,hash:'SHA-256'},imported,256))}`;
+ return `scrypt$16384$8$5$${hex(salt)}$${scryptSync(password,salt,32,scryptOptions).toString('hex')}`;
 }
 export async function verifyPassword(password,stored){
  if(typeof password!=='string'||password.length>128)return false;
- const parts=/^pbkdf2\$600000\$([a-f0-9]{32})\$([a-f0-9]{64})$/.exec(stored||'');
+ const parts=/^scrypt\$16384\$8\$5\$([a-f0-9]{32})\$([a-f0-9]{64})$/.exec(stored||'');
  if(!parts)return false;
- const imported=await crypto.subtle.importKey('raw',enc.encode(password),'PBKDF2',false,['deriveBits']);
- const result=hex(await crypto.subtle.deriveBits({name:'PBKDF2',salt:unhex(parts[1]),iterations:600000,hash:'SHA-256'},imported,256));
- let difference=0;for(let i=0;i<64;i++)difference|=result.charCodeAt(i)^parts[2].charCodeAt(i);return difference===0;
+ return timingSafeEqual(scryptSync(password,unhex(parts[1]),32,scryptOptions),unhex(parts[2]));
 }
 export async function limit(env,client,action,max=8,period=900000){
  const revision=(await env.DB.prepare('SELECT revision FROM admin_credentials WHERE id=1').first())?.revision||0;
