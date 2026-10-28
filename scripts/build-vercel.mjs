@@ -2,9 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import './sync-assets.mjs';
-import { execFileSync } from 'node:child_process';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
-execFileSync(process.execPath,[path.join(root,'scripts/generate-brand-favicon.mjs'),path.join(root,'public/images/logo.png'),path.join(root,'public/images/favicon-logo.png'),'0,0,130,159'],{stdio:'inherit'});
 const out=path.join(root,'.vercel/output'),fn=path.join(out,'functions/store.func');
 await fs.rm(out,{recursive:true,force:true});await fs.mkdir(fn,{recursive:true});
 // Explicit allowlists keep credentials, local databases, fixtures and build
