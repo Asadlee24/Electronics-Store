@@ -8,7 +8,7 @@ await fs.rm(out,{recursive:true,force:true});await fs.mkdir(fn,{recursive:true})
 // Explicit allowlists keep credentials, local databases, fixtures and build
 // state out of both the CDN and Function bundle.
 const assets=path.join(out,'static');await fs.mkdir(assets,{recursive:true});
-for(const name of ['images','logo.png','app.js','styles.css','store.mjs','ui.mjs','admin.js','admin.css','access.js']){
+for(const name of ['favicon.png','favicon.ico','favicon.svg','images','logo.png','app.js','styles.css','store.mjs','ui.mjs','admin.js','admin.css','access.js']){
  const source=path.join(root,'public',name);try{await fs.cp(source,path.join(assets,name),{recursive:true});}catch(error){if(error.code!=='ENOENT')throw error;}
 }
 for(const name of ['server','deployment'])await fs.cp(path.join(root,name),path.join(fn,name),{recursive:true});
