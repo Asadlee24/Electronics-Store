@@ -48,6 +48,13 @@ test('public Vercel gateway cannot forward admin actions, visitor identity or ar
  assert.equal((await storefront(request('/api/private'),env,b.fetcher)).status,404);
  const req=request('/api/orders','POST',order());req.headers.set('origin','https://other.test');assert.equal((await storefront(req,env,b.fetcher)).status,403);assert.equal(b.calls.length,0);b.sqlite.close();
 });
+test('Vercel enforces the admin document policy when the backend omits headers',async()=>{
+ const response=await storefront(request('/admin/'),{...env,ADMIN_GATEWAY_SECRET:secret},
+  async()=>new Response('<form method="post"></form>',{headers:{'Content-Type':'text/html'}}));
+ assert.equal(response.status,200);
+ assert.equal(response.headers.get('x-frame-options'),'DENY');
+ assert.match(response.headers.get('content-security-policy'), /script-src 'self'/);
+});
 test('backend rejects unsigned, expired and body-tampered guest requests',async()=>{
  const b=backend(),id='a'.repeat(64),input=order(),timestamp=String(Date.now()),body=JSON.stringify(input);
  const base={Origin:BACKEND_ORIGIN,'Content-Type':'application/json','x-mdk-guest':id,'x-mdk-time':timestamp};

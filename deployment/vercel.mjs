@@ -37,8 +37,12 @@ export async function storefront(request,env=process.env,fetcher=fetch){
    const response=await fetcher(BACKEND_ORIGIN+url.pathname+url.search,{method:request.method,headers:{'OAI-Sites-Authorization':'Bearer '+token,cookie,...signed,...(contentType?{'Content-Type':contentType}:{}),Origin:BACKEND_ORIGIN,'Sec-Fetch-Site':'same-origin'},...(raw?{body:raw}:{}),redirect:'manual',signal:AbortSignal.timeout(20000)});
    // Keep the browser Origin on same-site form posts; suppress referrers
    // on external navigation so recovery tokens cannot leak to other sites.
-   const headers=new Headers({'Content-Type':response.headers.get('content-type')||'text/plain','Cache-Control':'no-store','Referrer-Policy':'same-origin','X-Content-Type-Options':'nosniff'});
-   for(const name of ['content-security-policy','x-frame-options']){const value=response.headers.get(name);if(value)headers.set(name,value);}
+   const headers=new Headers({...securityHeaders,'Content-Type':response.headers.get('content-type')||'text/plain','Cache-Control':'no-store'});
+   if(path==='/admin'||path.startsWith('/admin/')){
+    for(const [name,value] of Object.entries(documentHeaders))headers.set(name,value);
+   }else{
+    for(const name of ['content-security-policy','x-frame-options']){const value=response.headers.get(name);if(value)headers.set(name,value);}
+   }
    for(const cookie of adminSessionCookies(response.headers))headers.append('Set-Cookie',cookie.replace(/SameSite=Strict/i,'SameSite=Lax'));
    const location=response.headers.get('location');
    if(location){if(!location.startsWith('/admin')||location.startsWith('//'))throw Error('Unexpected admin redirect');headers.set('Location',location);}
