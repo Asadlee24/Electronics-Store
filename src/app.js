@@ -14,7 +14,7 @@ function toast(message){const element=$('#toast');element.textContent=message;el
 function openDialog(id){const d=$(id);if(!d.open)d.showModal()}
 $$('dialog').forEach(d=>{d.addEventListener('click',e=>{if(e.target===d){const r=d.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)d.close()}});d.addEventListener('close',()=>document.body.classList.remove('dialog-open'))});
 function open(id){document.body.classList.add('dialog-open');openDialog(id)}
-function lineItem(item,compact=false){const p=products.find(p=>p.id===item.id);if(!p)return '';return `<div class="bag-item"><a class="bag-item-image" href="/product/${p.slug}/"><img src="${p.images[0]}" width="90" height="90" alt="${esc(p.name)}"></a><div class="bag-item-info"><a href="/product/${p.slug}/">${esc(p.name)}</a><span>${money(p.price)}</span>${compact?`<small>Quantity: ${item.quantity}</small>`:`<div class="bag-item-actions"><div class="quantity-control small-quantity"><button class="icon-button" data-change="${p.id}" data-delta="-1" aria-label="Decrease ${esc(p.name)} quantity">${icon('minus')}</button><span>${item.quantity}</span><button class="icon-button" data-change="${p.id}" data-delta="1" aria-label="Increase ${esc(p.name)} quantity" ${item.quantity>=MAX_QUANTITY?'disabled':''}>${icon('plus')}</button></div><button class="remove-link" data-remove="${p.id}">Remove</button></div>`}</div><strong class="line-total">${money(p.price*item.quantity)}</strong></div>`}
+function lineItem(item,compact=false){const p=products.find(p=>p.id===item.id);if(!p)return '';return `<div class="bag-item"><a class="bag-item-image" href="/product/${encodeURIComponent(p.slug)}/"><img src="${esc(p.images[0])}" width="90" height="90" alt="${esc(p.name)}"></a><div class="bag-item-info"><a href="/product/${encodeURIComponent(p.slug)}/">${esc(p.name)}</a><span>${money(p.price)}</span>${compact?`<small>Quantity: ${item.quantity}</small>`:`<div class="bag-item-actions"><div class="quantity-control small-quantity"><button class="icon-button" data-change="${esc(p.id)}" data-delta="-1" aria-label="Decrease ${esc(p.name)} quantity">${icon('minus')}</button><span>${item.quantity}</span><button class="icon-button" data-change="${esc(p.id)}" data-delta="1" aria-label="Increase ${esc(p.name)} quantity" ${item.quantity>=MAX_QUANTITY?'disabled':''}>${icon('plus')}</button></div><button class="remove-link" data-remove="${esc(p.id)}">Remove</button></div>`}</div><strong class="line-total">${money(p.price*item.quantity)}</strong></div>`}
 function totals(){return `<div class="total-line"><span>Product subtotal</span><strong>${money(bagTotal(bag,products))}</strong></div><div class="total-line muted"><span>Delivery</span><span>Confirmed by our team</span></div><p class="small muted">Final availability, delivery charges and payment are confirmed on WhatsApp.</p>`}
 function renderBag(){
  const count=bag.reduce((s,x)=>s+x.quantity,0);$$('.bag-count').forEach(e=>e.textContent=count);
@@ -64,7 +64,7 @@ function applyFilters(updateUrl=false){
 $$('[data-filter]').forEach(b=>b.addEventListener('click',()=>{category=b.dataset.filter;applyFilters(true)}));
 collectionSearch?.addEventListener('input',()=>applyFilters(true));$('#sort-products')?.addEventListener('change',()=>applyFilters());$('#in-stock-only')?.addEventListener('change',()=>applyFilters());
 $('#reset-filters')?.addEventListener('click',()=>{category='all';collectionSearch.value='';$('#in-stock-only').checked=false;$('#sort-products').value='featured';applyFilters(true)});
-function renderSuggestions(query){const found=filterProducts(products,{query}).slice(0,4);$('#search-suggestions').innerHTML=found.length?found.map(p=>`<a class="suggestion" href="/product/${p.slug}/"><img src="${p.images[0]}" alt="" width="58" height="58"><span>${esc(p.name)}<small>${money(p.price)}</small></span>${icon('arrow')}</a>`).join(''):'<p>No products found. Try another search.</p>'}
+function renderSuggestions(query){const found=filterProducts(products,{query}).slice(0,4);$('#search-suggestions').innerHTML=found.length?found.map(p=>`<a class="suggestion" href="/product/${encodeURIComponent(p.slug)}/"><img src="${esc(p.images[0])}" alt="" width="58" height="58"><span>${esc(p.name)}<small>${money(p.price)}</small></span>${icon('arrow')}</a>`).join(''):'<p>No products found. Try another search.</p>'}
 $('#global-search')?.addEventListener('input',e=>renderSuggestions(e.target.value));
 // Product gallery and quantities.
 $$('[data-gallery]').forEach(b=>b.addEventListener('click',()=>{const image=$('#gallery-main');image.src=b.dataset.gallery;$('#gallery-index').textContent=b.dataset.index.padStart(2,'0');$$('[data-gallery]').forEach(t=>{t.classList.toggle('active',t===b);t.setAttribute('aria-pressed',String(t===b))})}));
@@ -90,8 +90,10 @@ $('#order-form')?.addEventListener('submit',async event=>{
   const payment=bank?{method:details.paymentMethod,senderName:details.senderName,transactionRef:details.transactionRef,proof:await proofBase64(file)}:{method:'whatsapp'};
   const response=await fetch('/api/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({requestId:orderAttempt.id,items:bag,details,payment,consent:true})});
   const result=await response.json();if(!response.ok)throw new Error(result.error||'Could not save the request.');
-  if(popup)popup.location=result.whatsappUrl;
-  const next=`<a href="${esc(result.whatsappUrl)}" target="_blank" rel="noopener">Continue on WhatsApp ${icon('upRight')}</a>`;
+  const whatsapp=new URL(result.whatsappUrl);
+  if(whatsapp.origin!=='https://wa.me')throw new Error('The WhatsApp link is unavailable.');
+  if(popup)popup.location=whatsapp.href;
+  const next=`<a href="${esc(whatsapp.href)}" target="_blank" rel="noreferrer">Continue on WhatsApp ${icon('upRight')}</a>`;
   status.innerHTML=bank&&result.proofReceived?`Order <strong>${esc(result.reference)}</strong> and proof received. Payment is pending verification. Updates will be sent to your email. ${next}.`:`${result.saved===false?'Your order details are ready.':`Request <strong>${esc(result.reference)}</strong> saved.`} ${next}.`;
 
  }catch(error){if(popup)popup.close();status.textContent=error.message;}finally{button.disabled=false;button.innerHTML=(bank?'Submit order & proof':'Continue on WhatsApp')+' '+icon('upRight');}
@@ -116,3 +118,5 @@ $('#contact-form')?.addEventListener('submit',async event=>{
  const button=form.querySelector('button[type="submit"]'),status=$('#contact-status');button.disabled=true;button.textContent='Sending…';status.textContent='';
  try{const response=await fetch('/api/contact',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...fields,consent:form.elements.consent.checked,requestId:contactAttempt.id})});const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not send your message.');status.textContent='Message received. Reference '+data.reference+'. We’ll get back to you.';form.reset();contactAttempt=null;}catch(error){status.textContent=error.message;}finally{button.disabled=false;button.innerHTML='Send message '+icon('arrow');}
 });
+
+for(const form of $$('#order-form, #contact-form'))form.hidden=false;

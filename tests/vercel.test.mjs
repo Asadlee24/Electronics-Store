@@ -66,5 +66,14 @@ test('standalone mode serves local catalogue gracefully when backend configurati
  assert.equal(cat.status,200);
  const products=await cat.json();
  assert.ok(Array.isArray(products)&&products.length>=9);
+ for(const [path,action] of [['/checkout/','/api/orders'],['/contact-us/','/api/contact']]){
+  const page=await storefront(request(path),{});
+  assert.match(page.headers.get('content-security-policy'),/script-src 'self'/);
+  assert.match((await page.text()).match(/<form[^>]*id="(?:order|contact)-form"[^>]*>/)?.[0]||'',new RegExp('method="post" action="'+action+'" hidden'));
+ }
+ const crossOrigin=request('/api/orders','POST',order());
+ crossOrigin.headers.set('origin','https://other.test');
+ assert.equal((await storefront(crossOrigin,{})).status,403);
+
  const r=await storefront(request('/'),env,async()=>new Response('<html>Sign in</html>',{headers:{'Content-Type':'text/html'}}));assert.equal(r.status,503);assert.doesNotMatch(await r.text(),/local-test-token/);
 });

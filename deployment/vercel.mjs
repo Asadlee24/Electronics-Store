@@ -4,7 +4,8 @@ import {signGuest} from '../server/gateway-auth.mjs';
 import {adminGatewayHeaders} from '../server/admin-auth.mjs';
 import {accessPage} from '../server/access-page.mjs';
 import originalProducts from '../src/catalog.json' with {type:'json'};
-import {validateOrder,orderMessage} from '../server/catalogue.mjs';
+import {documentHeaders,securityHeaders} from '../server/security.mjs';
+import {validateOrder,orderMessage,requireSameOrigin} from '../server/catalogue.mjs';
 
 // The browser can reach only these public backend operations. Never forward
 // visitor cookies, identity headers, arbitrary URLs, or admin API requests.
@@ -22,7 +23,7 @@ export async function storefront(request,env=process.env,fetcher=fetch){
  const token=env.MDK_SITES_SERVICE_TOKEN,secret=env.STOREFRONT_GATEWAY_SECRET;
  const hasBackend=Boolean(token&&secret&&secret.length>=32);
  if(path==='/admin'||path.startsWith('/admin/')||path.startsWith('/api/admin/')){
-  if(!token||!env.ADMIN_GATEWAY_SECRET||env.ADMIN_GATEWAY_SECRET.length<32)return new Response(accessPage({mode:'unavailable',message:'The owner connection is not configured yet.'}),{status:503,headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'}});
+  if(!token||!env.ADMIN_GATEWAY_SECRET||env.ADMIN_GATEWAY_SECRET.length<32)return new Response(accessPage({mode:'unavailable',message:'The owner connection is not configured yet.'}),{status:503,headers:{...documentHeaders,'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'}});
   if(!['GET','HEAD','POST','PATCH'].includes(request.method))return json({error:'Method not allowed.'},405);
   if(!['GET','HEAD'].includes(request.method)&&(request.headers.get('origin')!==url.origin||!['same-origin','none',null].includes(request.headers.get('sec-fetch-site'))))return json({error:'Please use the form on this site.'},403);
   try{
@@ -42,7 +43,7 @@ export async function storefront(request,env=process.env,fetcher=fetch){
    const location=response.headers.get('location');
    if(location){if(!location.startsWith('/admin')||location.startsWith('//'))throw Error('Unexpected admin redirect');headers.set('Location',location);}
    return new Response(response.body,{status:response.status,headers});
-  }catch{return new Response(accessPage({mode:'unavailable',message:'Please try again shortly.'}),{status:503,headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'}});}
+  }catch{return new Response(accessPage({mode:'unavailable',message:'Please try again shortly.'}),{status:503,headers:{...documentHeaders,'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'}});}
  }
 
  if(path==='/api/contact'&&request.method==='POST'){
@@ -61,7 +62,7 @@ export async function storefront(request,env=process.env,fetcher=fetch){
  if(!hasBackend){
   try{
    if(path==='/api/orders'&&request.method==='POST'){
-    if(request.headers.get('origin')!==url.origin&&['cross-site'].includes(request.headers.get('sec-fetch-site')))return json({error:'Please submit this request from the store.'},403);
+    requireSameOrigin(request);
     if(!request.headers.get('content-type')?.includes('application/json'))return json({error:'Send JSON data.'},415);
     const raw=await request.text();if(raw.length>2900000)return json({error:'Request is too large.'},413);
     let body;try{body=JSON.parse(raw);}catch{return json({error:'Invalid request data.'},400);}
@@ -129,7 +130,8 @@ export default async function handler(req,res){
   if(!req.url?.startsWith('/')||req.url.startsWith('//'))throw new Error('Invalid path');
   let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>(req.url?.startsWith('/api/admin/upload')?4*1024*1024:req.url?.split('?')[0]==='/api/orders'?2900000:50000)){res.statusCode=413;res.end('Request is too large.');return;}chunks.push(chunk);}
   const request=new Request('https://'+host+req.url,{method:req.method,headers,...(!['GET','HEAD'].includes(req.method)?{body:Buffer.concat(chunks)}:{})});
-  const response=await storefront(request);res.statusCode=response.status;response.headers.forEach((value,key)=>{if(key!=='set-cookie')res.setHeader(key,value);});
+  const response=await storefront(request);res.statusCode=response.status;
+  for(const [key,value] of Object.entries(securityHeaders))res.setHeader(key,value);response.headers.forEach((value,key)=>{if(key!=='set-cookie')res.setHeader(key,value);});
   const cookies=response.headers.getSetCookie();if(cookies.length)res.setHeader('Set-Cookie',cookies);
   res.end(req.method==='HEAD'?undefined:Buffer.from(await response.arrayBuffer()));
  }catch{res.statusCode=400;res.end('Invalid request.');}
