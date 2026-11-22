@@ -1,10 +1,11 @@
+import {documentHeaders} from './security.mjs';
 import informationPages from '../src/pages.json' with {type:'json'};
 import {shell,home,shop,product,checkout,contact,information,notFound} from '../src/render.mjs';
 import {api} from './api.mjs';
 import {heroSettings} from './hero.mjs';
 import {catalogue} from './catalogue.mjs';
 import {adminRoute} from './admin-routes.mjs';
-const html=(body,status=200)=>new Response(body,{status,headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'strict-origin-when-cross-origin','X-Frame-Options':'SAMEORIGIN'}});
+const html=(body,status=200)=>new Response(body,{status,headers:{...documentHeaders,'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'}});
 export async function route(request,env){
  const url=new URL(request.url),path=url.pathname;
  if(path.startsWith('/api/')||path.startsWith('/media/'))return api(request,env);

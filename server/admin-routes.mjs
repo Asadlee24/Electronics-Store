@@ -1,9 +1,10 @@
+import {documentHeaders} from './security.mjs';
 import {ApiError,requireSameOrigin} from './catalogue.mjs';
 import {adminContext,adminSession,signIn,signOut,requestReset,resetPassword,confirmOwnerEmail} from './admin-auth.mjs';
 import {accessPage} from './access-page.mjs';
 import {adminPage} from './admin-page.mjs';
 import {passwordEmail,sendEmail} from './emails.mjs';
-const html=(body,status=200)=>new Response(body,{status,headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Referrer-Policy':'same-origin','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY'}});
+const html=(body,status=200)=>new Response(body,{status,headers:{...documentHeaders,'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'}});
 const redirect=(location,cookie)=>new Response(null,{status:303,headers:{Location:location,'Cache-Control':'no-store',...(cookie?{'Set-Cookie':cookie}:{})}});
 export async function adminRoute(request,env){
  const url=new URL(request.url),path=url.pathname.replace(/\/$/,'');

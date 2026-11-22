@@ -1,3 +1,4 @@
+import {securityHeaders} from '../server/security.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -16,5 +17,5 @@ await fs.mkdir(path.join(fn,'src'),{recursive:true});
 for(const name of ['render.mjs','catalog.json','pages.json','hero-defaults.json','bank.json','easypaisa.json'])await fs.copyFile(path.join(root,'src',name),path.join(fn,'src',name));
 await fs.writeFile(path.join(fn,'package.json'),JSON.stringify({type:'module'}));
 await fs.writeFile(path.join(fn,'.vc-config.json'),JSON.stringify({runtime:'nodejs22.x',handler:'deployment/vercel.mjs',launcherType:'Nodejs',maxDuration:30}));
-await fs.writeFile(path.join(out,'config.json'),JSON.stringify({version:3,routes:[{handle:'filesystem'},{src:'/(.*)',dest:'/store'}]}));
+await fs.writeFile(path.join(out,'config.json'),JSON.stringify({version:3,routes:[{src:'/(.*)',headers:securityHeaders,continue:true},{handle:'filesystem'},{src:'/(.*)',dest:'/store'}]}));
 console.log('Vercel Build Output API bundle created: Node function + public assets. No Next.js manifest required.');

@@ -48,6 +48,13 @@ test('public Vercel gateway cannot forward admin actions, visitor identity or ar
  assert.equal((await storefront(request('/api/private'),env,b.fetcher)).status,404);
  const req=request('/api/orders','POST',order());req.headers.set('origin','https://other.test');assert.equal((await storefront(req,env,b.fetcher)).status,403);assert.equal(b.calls.length,0);b.sqlite.close();
 });
+test('Vercel enforces the admin document policy when the backend omits headers',async()=>{
+ const response=await storefront(request('/admin/'),{...env,ADMIN_GATEWAY_SECRET:secret},
+  async()=>new Response('<form method="post"></form>',{headers:{'Content-Type':'text/html'}}));
+ assert.equal(response.status,200);
+ assert.equal(response.headers.get('x-frame-options'),'DENY');
+ assert.match(response.headers.get('content-security-policy'), /script-src 'self'/);
+});
 test('backend rejects unsigned, expired and body-tampered guest requests',async()=>{
  const b=backend(),id='a'.repeat(64),input=order(),timestamp=String(Date.now()),body=JSON.stringify(input);
  const base={Origin:BACKEND_ORIGIN,'Content-Type':'application/json','x-mdk-guest':id,'x-mdk-time':timestamp};
@@ -66,5 +73,14 @@ test('standalone mode serves local catalogue gracefully when backend configurati
  assert.equal(cat.status,200);
  const products=await cat.json();
  assert.ok(Array.isArray(products)&&products.length>=9);
+ for(const [path,action] of [['/checkout/','/api/orders'],['/contact-us/','/api/contact']]){
+  const page=await storefront(request(path),{});
+  assert.match(page.headers.get('content-security-policy'),/script-src 'self'/);
+  assert.match((await page.text()).match(/<form[^>]*id="(?:order|contact)-form"[^>]*>/)?.[0]||'',new RegExp('method="post" action="'+action+'" hidden'));
+ }
+ const crossOrigin=request('/api/orders','POST',order());
+ crossOrigin.headers.set('origin','https://other.test');
+ assert.equal((await storefront(crossOrigin,{})).status,403);
+
  const r=await storefront(request('/'),env,async()=>new Response('<html>Sign in</html>',{headers:{'Content-Type':'text/html'}}));assert.equal(r.status,503);assert.doesNotMatch(await r.text(),/local-test-token/);
 });
